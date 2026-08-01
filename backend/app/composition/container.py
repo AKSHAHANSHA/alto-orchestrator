@@ -105,7 +105,9 @@ def _build_retriever(settings: Settings) -> Any:
             FastEmbedReranker,
         )
 
-        client = QdrantClient(url=settings.qdrant_url, timeout=10)
+        client = QdrantClient(
+            url=settings.qdrant_url, api_key=settings.qdrant_api_key or None, timeout=10
+        )
         existing = {c.name for c in client.get_collections().collections}
         if not existing:
             logger.warning(

@@ -57,8 +57,12 @@ class Settings(BaseSettings):
     redis_ttl_seconds: int = 3600
 
     # ── Qdrant ────────────────────────────────────────────────────────
+    # `qdrant_host` is either a bare host (local Docker, combined with the
+    # port below) or a full `https://...cloud.qdrant.io` URL (Qdrant Cloud,
+    # port already implied by the scheme).
     qdrant_host: str = "localhost"
     qdrant_http_port: int = 6333
+    qdrant_api_key: str = ""
 
     # ── LLM providers ─────────────────────────────────────────────────
     llm_provider: ProviderName = ProviderName.MOCK
@@ -167,6 +171,8 @@ class Settings(BaseSettings):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def qdrant_url(self) -> str:
+        if self.qdrant_host.startswith("http://") or self.qdrant_host.startswith("https://"):
+            return self.qdrant_host
         return f"http://{self.qdrant_host}:{self.qdrant_http_port}"
 
     @computed_field  # type: ignore[prop-decorator]

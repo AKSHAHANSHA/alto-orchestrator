@@ -266,7 +266,9 @@ async def index(collection: str, chunks: list[Chunk], *, recreate: bool) -> None
     from qdrant_client import QdrantClient, models
 
     settings = get_settings()
-    client = QdrantClient(url=settings.qdrant_url, timeout=120)
+    client = QdrantClient(
+        url=settings.qdrant_url, api_key=settings.qdrant_api_key or None, timeout=120
+    )
     embedder = FastEmbedEmbedder(
         dense_model=settings.dense_embedding_model,
         sparse_model=settings.sparse_embedding_model,
