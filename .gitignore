@@ -4,6 +4,7 @@
 !.env.example
 *.pem
 *.key
+backend-env.yaml
 
 # ── Python ───────────────────────────────────────────────────────────
 __pycache__/
