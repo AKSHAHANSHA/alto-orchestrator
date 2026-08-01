@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     dense_embedding_dim: int = 384
     sparse_embedding_model: str = "Qdrant/bm25"
     rerank_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
+    # The cross-encoder is the most memory-hungry, most skippable retrieval
+    # component — it only refines an already-correct RRF order. Toggleable so
+    # memory-constrained deployments can drop it without touching retrieval
+    # code.
+    retrieval_rerank_enabled: bool = True
 
     retrieval_prefetch_limit: int = Field(default=100, gt=0)
     retrieval_fusion_top_k: int = Field(default=20, gt=0)

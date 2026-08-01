@@ -123,7 +123,11 @@ def _build_retriever(settings: Settings) -> Any:
                 sparse_model=settings.sparse_embedding_model,
                 dimension=settings.dense_embedding_dim,
             ),
-            reranker=FastEmbedReranker(settings.rerank_model),
+            reranker=(
+                FastEmbedReranker(settings.rerank_model)
+                if settings.retrieval_rerank_enabled
+                else None
+            ),
             prefetch_limit=settings.retrieval_prefetch_limit,
             fusion_top_k=settings.retrieval_fusion_top_k,
             rerank_top_k=settings.retrieval_rerank_top_k,
