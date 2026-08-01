@@ -1,0 +1,47 @@
+# ── Secrets ──────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ── Python ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# ── Node / Next.js ───────────────────────────────────────────────────
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+.npm/
+.eslintcache
+
+# ── Local model weights ──────────────────────────────────────────────
+# FastEmbed ONNX weights (~500 MB) are downloaded on first run and baked
+# into the Docker image. Never commit them.
+.model_cache/
+*.onnx
+
+# ── Runtime artifacts ────────────────────────────────────────────────
+qdrant_storage/
+postgres_data/
+*.log
+logs/
+
+# ── Editors / OS ─────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

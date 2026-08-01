@@ -1,0 +1,171 @@
+# Intent policy — the rule engine that turns a model observation into work.
+#
+# The model reports "intent = trade_in_valuation, confidence 0.96". Everything
+# below — which department owns it, how it is prioritised, what facts must be
+# collected, what it depends on — is decided here, not by the model.
+#
+# Changing routing is an edit to this file plus a test. It is never a prompt
+# change, and it never requires a deployment of new logic.
+
+version: 1
+
+# Priority orders the intent queue. Higher runs first.
+#
+# Rationale for the ordering: complaints outrank everything because an unhappy
+# customer compounds; test drives come next because slots are perishable and a
+# missed Saturday cannot be recovered; financing precedes trade-in because it
+# is more often the blocker on a sale; pure information requests are last
+# because they are the cheapest to satisfy late.
+categories:
+  complaint_escalation:
+    department: customer_relations
+    priority: 100
+    required_slots: []
+    # Always human. A complaint routed to automation is a second complaint.
+    force_human: true
+    sla_minutes: 15
+
+  test_drive_booking:
+    department: sales
+    priority: 80
+    required_slots:
+      - new_vehicle_brand
+      - new_vehicle_model
+      - preferred_date
+    optional_slots:
+      - preferred_time
+      - contact_phone
+    sla_minutes: 60
+
+  financing_emi:
+    department: finance
+    priority: 70
+    required_slots:
+      - new_vehicle_brand
+      - new_vehicle_model
+    optional_slots:
+      - budget
+      - down_payment
+      - tenure_months
+      - monthly_income
+      - salary_transfer
+    # A financing quote depends on the trade-in value when both are in play:
+    # the part-exchange changes the financeable amount, so quoting first would
+    # give the customer a number we would then have to retract.
+    depends_on_categories:
+      - trade_in_valuation
+    sla_minutes: 120
+
+  trade_in_valuation:
+    department: trade_in
+    priority: 60
+    required_slots:
+      - old_vehicle_brand
+      - old_vehicle_model
+      - old_vehicle_year
+    optional_slots:
+      - old_vehicle_mileage
+      - old_vehicle_condition
+    sla_minutes: 240
+
+  pricing_offers:
+    department: sales
+    priority: 55
+    required_slots:
+      - new_vehicle_brand
+      - new_vehicle_model
+    sla_minutes: 120
+
+  service_aftersales:
+    department: service
+    priority: 50
+    required_slots:
+      - vehicle_reference
+    sla_minutes: 240
+
+  vehicle_availability_info:
+    department: sales
+    priority: 40
+    required_slots:
+      - vehicle_reference
+    sla_minutes: 120
+
+  general_info:
+    department: sales
+    priority: 45
+    # Deliberately no required slots. Hours, location, showroom rules — none
+    # of these need a vehicle. Retrieval answers from the policy documents.
+    required_slots: []
+    sla_minutes: 60
+
+  small_talk:
+    department: sales
+    priority: 20
+    # Greetings and closings need nothing. The generator writes a warm
+    # short line and the conversation continues.
+    required_slots: []
+    sla_minutes: 5
+
+  unclear_needs_clarification:
+    department: sales
+    priority: 30
+    required_slots:
+      - vehicle_reference
+    sla_minutes: 60
+
+# Order in which missing slots are requested. Clarification asks for one thing
+# per turn, taking the first unfilled slot in this list — an interrogation
+# drives customers away faster than a slow reply.
+slot_question_order:
+  - vehicle_reference
+  - new_vehicle_brand
+  - new_vehicle_model
+  - old_vehicle_brand
+  - old_vehicle_model
+  - old_vehicle_year
+  - preferred_date
+  - old_vehicle_mileage
+  - down_payment
+  - tenure_months
+  - preferred_time
+  - contact_phone
+
+# What the platform asks when a slot is missing. Kept here rather than in a
+# prompt so the wording is reviewable by the business and testable verbatim.
+slot_questions:
+  vehicle_reference:
+    en: "Happy to help — which vehicle are you asking about?"
+    ar: "بكل سرور — عن أي سيارة تسأل؟"
+  new_vehicle_brand:
+    en: "Which brand are you considering, Karva or Renzo?"
+    ar: "أي علامة تجارية تفكر فيها، كارفا أم رينزو؟"
+  new_vehicle_model:
+    en: "Which model did you have in mind?"
+    ar: "أي موديل تفكر فيه؟"
+  old_vehicle_brand:
+    en: "What brand is the car you would like to trade in?"
+    ar: "ما هي العلامة التجارية للسيارة التي ترغب في استبدالها؟"
+  old_vehicle_model:
+    en: "Which model is your current car?"
+    ar: "ما هو موديل سيارتك الحالية؟"
+  old_vehicle_year:
+    en: "What year is your current car?"
+    ar: "ما هي سنة صنع سيارتك الحالية؟"
+  old_vehicle_mileage:
+    en: "Roughly how many kilometres has it driven?"
+    ar: "كم عدد الكيلومترات المقطوعة تقريباً؟"
+  preferred_date:
+    en: "Which day would suit you for the test drive?"
+    ar: "ما هو اليوم المناسب لك لتجربة القيادة؟"
+  preferred_time:
+    en: "What time of day works best?"
+    ar: "ما هو الوقت الأنسب لك خلال اليوم؟"
+  down_payment:
+    en: "How much were you planning to put down?"
+    ar: "كم تخطط أن تدفع كدفعة أولى؟"
+  tenure_months:
+    en: "Over how many months would you like to spread the payments?"
+    ar: "على كم شهر ترغب في توزيع الأقساط؟"
+  contact_phone:
+    en: "What is the best number to reach you on?"
+    ar: "ما هو أفضل رقم للتواصل معك؟"

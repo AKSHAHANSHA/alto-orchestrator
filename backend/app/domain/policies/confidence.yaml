@@ -1,0 +1,82 @@
+# Confidence and routing policy.
+#
+# Canonical formula, from docs/spec/04_MODEL_ROUTING.md:
+#
+#   decision_score = 100 x (0.25*intent + 0.20*retrieval + 0.15*language
+#                           + 0.20*risk + 0.20*policy)
+#
+# The specification documents supplied three different signal sets (six, five
+# and four signals). The five weights below are canonical because doc 04 is
+# the only one that specifies arithmetic. `entity` confidence is measured and
+# displayed as first-class evidence and enters the score through `risk` —
+# low slot confidence *is* commercial risk, since it is what sends a lead to
+# the wrong department.
+
+version: 1
+
+weights:
+  intent: 0.25
+  retrieval: 0.20
+  language: 0.15
+  risk: 0.20
+  policy: 0.20
+
+thresholds:
+  auto: 90        # >= 90  -> fast model, may auto-send
+  premium: 75     # 75-89  -> premium model, reason harder
+                  # <  75  -> human handoff
+
+# How `entity` and `sentiment` fold into the `risk` signal. Risk starts at 1.0
+# and each condition subtracts from it.
+risk_penalties:
+  low_entity_confidence: 0.30      # entity confidence below entity_floor
+  missing_required_slot: 0.25
+  negative_sentiment: 0.20
+  high_urgency: 0.10
+  financial_figure_present: 0.15   # any quoted money amount raises exposure
+  multi_intent: 0.05               # more moving parts, more to get wrong
+
+entity_floor: 0.70
+
+# Conditions that force a human regardless of the computed score.
+#
+# These exist because a weighted average can always be dragged over the line
+# by strong unrelated signals. Confident retrieval should never be able to
+# authorise auto-sending an answer to a furious customer.
+hard_overrides:
+  - id: complaint_always_human
+    reason: complaint
+    when: intent_category_is
+    value: complaint_escalation
+
+  - id: negative_high_urgency
+    reason: negative_sentiment
+    when: sentiment_negative_and_urgent
+
+  - id: grounding_failed
+    reason: grounding_failed
+    when: grounding_not_passed
+
+  - id: unsupported_financial_claim
+    reason: unsupported_financial_claim
+    when: numeric_claim_unsupported
+
+  - id: previously_human_handled
+    reason: previously_human_handled
+    when: conversation_touched_by_human
+
+# Which model tier serves which stage.
+#
+# Understanding is high-volume and structurally simple, so it runs on the fast
+# tier. Generation carries the customer-visible risk and runs premium whenever
+# the decision layer did not already clear it as routine.
+model_tiers:
+  normalize: fast
+  detect_language: fast
+  discover_intents: fast
+  extract_entities: fast
+  score_sentiment: fast
+  clarify: fast
+  generate_auto: fast
+  generate_premium: premium
+  summarize: fast

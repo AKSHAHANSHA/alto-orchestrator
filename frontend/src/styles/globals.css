@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-paper text-ink font-sans text-body;
+    font-feature-settings: "kern" 1, "liga" 1, "tnum" 1;
+  }
+
+  /* Arabic text is right-to-left and needs a face with proper Naskh forms.
+     Applied by direction rather than by language tag so a bilingual reply
+     renders correctly without the component having to know. */
+  [dir="rtl"] {
+    @apply font-arabic;
+    text-align: right;
+  }
+
+  ::selection {
+    @apply bg-ink text-paper;
+  }
+
+  :focus-visible {
+    outline: 2px solid theme("colors.renzo.DEFAULT");
+    outline-offset: 3px;
+  }
+}
+
+@layer components {
+  /* The 12-column field the whole page aligns to. Nothing sits outside it. */
+  .grid-field {
+    @apply mx-auto grid w-full max-w-grid grid-cols-4 gap-x-5 px-6 md:grid-cols-12 md:px-10 lg:px-16;
+  }
+
+  /* Small caps label, the Swiss workhorse for section marks and metadata. */
+  .label {
+    @apply font-mono text-label uppercase tracking-[0.13em] text-ink-faint;
+  }
+
+  .rule-top {
+    @apply border-t border-rule;
+  }
+
+  /* Numeric data must align in columns; tabular figures are non-negotiable
+     for scores and money. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  /* Reveal-on-scroll. Structural, not theatrical — content settles into the
+     grid rather than flying across it. */
+  .reveal {
+    opacity: 0;
+    transform: translateY(14px);
+    transition:
+      opacity 0.7s cubic-bezier(0.22, 0.61, 0.36, 1),
+      transform 0.7s cubic-bezier(0.22, 0.61, 0.36, 1);
+  }
+
+  .reveal[data-visible="true"] {
+    opacity: 1;
+    transform: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .reveal {
+      opacity: 1;
+      transform: none;
+      transition: none;
+    }
+
+    html {
+      scroll-behavior: auto;
+    }
+  }
+}

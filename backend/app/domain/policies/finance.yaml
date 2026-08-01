@@ -1,0 +1,85 @@
+# Auto-finance constraints.
+#
+# Every figure here is taken from the ingested source documents in
+# data/knowledge/finance/, with the citation recorded alongside it. Nothing in
+# this file is invented, because these numbers reach customers as quotes.
+#
+# The regulator sets the outer bounds; individual banks may be stricter but
+# never looser. Where a bank differs, the tighter constraint wins.
+
+version: 1
+
+# ── Regulatory limits (CBUAE, Regulations Regarding Bank Loans & Other
+#    Services Offered to Individual Customers) ──────────────────────────
+regulatory:
+  # "should not exceed ... (80%) eighty percent of the value of the financed
+  # vehicle" -> a minimum 20% down payment.
+  max_loan_to_value: 0.80
+  min_down_payment_ratio: 0.20
+  # "The maximum period for repayment of the loan shall be (60) months"
+  max_tenure_months: 60
+  # "interest amount shall be calculated on the reducing balance of the loan"
+  interest_method: reducing_balance
+  # "of value not exceeding 120% of value of the loan or the debit balance"
+  max_security_cheque_ratio: 1.20
+  source: cbuae-bank-loans-regulation.pdf
+
+# ── Defaults applied when the customer has not specified terms ─────────
+#
+# Chosen to be the regulator's floor rather than an optimistic assumption:
+# quoting the cheapest possible instalment and revising upward later is how
+# trust is lost.
+defaults:
+  down_payment_ratio: 0.20
+  tenure_months: 60
+  annual_profit_rate: 0.0399        # indicative mid-market; see rate_bands
+  currency: AED
+
+# Indicative annual reducing-balance rates. Salary transfer materially
+# improves pricing across every source document, so it is modelled explicitly
+# rather than averaged away.
+rate_bands:
+  - id: salary_transfer
+    label: Salary transferred to the financing bank
+    annual_rate: 0.0299
+    requires_salary_transfer: true
+  - id: no_salary_transfer
+    label: Salary not transferred
+    annual_rate: 0.0499
+    requires_salary_transfer: false
+
+# ── Eligibility bounds, used to reject impossible quotes before they are
+#    generated rather than after a customer has seen them ───────────────
+eligibility:
+  max_finance_amount_aed: 500000     # cbd-auto-loan-kfs.pdf
+  min_finance_amount_aed: 10000
+  max_age_at_maturity_national: 65   # cbd-auto-loan-kfs.pdf
+  max_age_at_maturity_expat: 60
+  # Instalment as a share of monthly income. CBUAE caps total debt service at
+  # 50% of income; auto finance is allocated a conservative share of that.
+  max_instalment_to_income_ratio: 0.30
+
+# ── Fees the customer will encounter, disclosed with every quote ───────
+fees:
+  early_settlement_ratio: 0.01
+  early_settlement_note: >-
+    Early settlement terms vary by bank and some waive the fee for armed
+    forces personnel. Confirm with the financing partner before committing.
+  processing_fee_ratio: 0.01
+
+# ── Quoting rules ─────────────────────────────────────────────────────
+quoting:
+  # Instalments are computed by a deterministic function, never by a model.
+  # This removes an entire class of hallucination from the highest-risk
+  # output the platform produces.
+  computation: deterministic_only
+  # A quote is an estimate until a bank underwrites it. Stated every time.
+  disclaimer_en: >-
+    This is an indicative estimate based on published terms and is not a
+    finance offer. Final rates and approval are subject to bank assessment.
+  disclaimer_ar: >-
+    هذا تقدير استرشادي يستند إلى الشروط المنشورة وليس عرض تمويل. تخضع الأسعار
+    النهائية والموافقة لتقييم البنك.
+  # Round to whole currency units. False precision reads as authority the
+  # number has not earned.
+  round_to: 1

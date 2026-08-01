@@ -1,0 +1,87 @@
+# Trade-in valuation model.
+#
+# No source material for trade-in pricing was supplied, so this model is
+# authored for Velmora and is explicitly synthetic. It is deterministic and
+# transparent by design: a customer who is quoted a number deserves to be told
+# how it was reached, and a model that hallucinated the figure could not.
+#
+# The base value comes from the catalog MSRP (data/catalog/vehicles.csv), then
+# depreciation, mileage and condition adjustments are applied in that order.
+
+version: 1
+synthetic: true            # not derived from real market data
+currency: AED
+
+# ── Depreciation by vehicle age ───────────────────────────────────────
+#
+# Retained value as a fraction of original MSRP. The steep first-year drop and
+# flattening tail follow the standard shape of automotive depreciation.
+# Interpolated linearly between the listed years; ages beyond the last entry
+# use `floor_retained_ratio`.
+depreciation_curve:
+  0: 1.00
+  1: 0.80
+  2: 0.71
+  3: 0.63
+  4: 0.56
+  5: 0.50
+  6: 0.44
+  7: 0.39
+  8: 0.34
+  10: 0.26
+  12: 0.20
+  15: 0.14
+
+floor_retained_ratio: 0.10
+
+# Premium marques hold value better. Applied as a multiplier on the retained
+# ratio, then clamped so no vehicle can exceed its original MSRP.
+brand_multipliers:
+  Renzo: 1.08
+  Karva: 1.00
+
+# ── Mileage adjustment ────────────────────────────────────────────────
+#
+# Measured against an expected 15,000 km per year. Vehicles under the
+# expectation gain value, those over it lose value, both capped so that an
+# extreme odometer reading cannot dominate the estimate.
+mileage:
+  expected_km_per_year: 15000
+  # Value change per 1,000 km of deviation from expected.
+  adjustment_per_1000km: 0.004
+  max_penalty_ratio: 0.25
+  max_bonus_ratio: 0.08
+
+# ── Condition adjustment ──────────────────────────────────────────────
+#
+# Self-reported by the customer and therefore unverified, which is why the
+# output is always a range and always "subject to inspection".
+condition_multipliers:
+  excellent: 1.08
+  good: 1.00
+  fair: 0.88
+  poor: 0.70
+
+default_condition: good
+
+# ── Output shape ──────────────────────────────────────────────────────
+#
+# A range, never a single number. A precise figure implies a binding offer
+# the dealership has not made and cannot honour before seeing the car.
+output:
+  range_spread: 0.07               # +/- around the point estimate
+  round_to: 500                    # round to the nearest AED 500
+  disclaimer_en: >-
+    This is an indicative range based on the vehicle details you provided.
+    The final offer is subject to a physical inspection at the showroom.
+  disclaimer_ar: >-
+    هذا نطاق استرشادي بناءً على تفاصيل السيارة التي قدمتها. يخضع العرض النهائي
+    للفحص الفعلي في المعرض.
+
+# Guard rails. Outside these bounds the tool declines to quote and the intent
+# is routed to the Trade-In team for manual appraisal — a wrong number is far
+# more damaging than an honest handoff.
+limits:
+  max_age_years: 20
+  max_mileage_km: 400000
+  min_estimate_aed: 1000

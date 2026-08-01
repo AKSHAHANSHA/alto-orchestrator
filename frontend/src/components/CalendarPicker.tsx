@@ -1,0 +1,293 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { api, type CalendarSlot } from "@/lib/api";
+
+/**
+ * Two-step slot picker: pick a day, then a 2-hour time slot.
+ *
+ * Feels more like a real booking page and less like a spreadsheet:
+ *   1. A horizontal strip of day cards at the top — day-of-week above,
+ *      day-of-month below. The selected day fills with ink.
+ *   2. A wrap-flow of time pills below for the selected day. Selected
+ *      pill picks up the Karva amber accent; unavailable pills are
+ *      muted with a soft strikethrough.
+ *   3. A confirmation bar with the exact slot the customer chose,
+ *      spelled out in dealer local time (no timezone reshuffle).
+ *
+ * All labels are pre-formatted by the backend in Asia/Dubai — the frontend
+ * never reformats a timestamp. That's what stopped the "customer sees
+ * 10:00, operator sees 15:30" mismatch.
+ */
+export function CalendarPicker({
+  conversationId,
+  vehicleLabel,
+  onBooked,
+  onCancel,
+}: {
+  conversationId: string;
+  vehicleLabel: string;
+  onBooked: (confirmation: string) => void;
+  onCancel?: () => void;
+}) {
+  const [slots, setSlots] = useState<CalendarSlot[] | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await api.listSlots();
+        if (!cancelled) {
+          setSlots(response.slots);
+          // Default the calendar to the first day that has any slot.
+          const firstDate = response.slots[0]?.iso_date ?? null;
+          setSelectedDate(firstDate);
+        }
+      } catch (exception) {
+        if (!cancelled) {
+          setError(
+            exception instanceof Error
+              ? exception.message
+              : "Could not load calendar slots.",
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Group by date once. Each day carries its own slot list so the UI can
+  // pull them by date without re-scanning the full array.
+  const days = useMemo(() => {
+    if (!slots) return [];
+    const byDate = new Map<
+      string,
+      {
+        iso: string;
+        day_short: string;
+        day_number: string;
+        month_short: string;
+        slots: CalendarSlot[];
+      }
+    >();
+    for (const slot of slots) {
+      const existing = byDate.get(slot.iso_date);
+      if (existing) {
+        existing.slots.push(slot);
+      } else {
+        byDate.set(slot.iso_date, {
+          iso: slot.iso_date,
+          day_short: slot.day_short,
+          day_number: slot.day_number,
+          month_short: slot.month_short,
+          slots: [slot],
+        });
+      }
+    }
+    return Array.from(byDate.values());
+  }, [slots]);
+
+  const activeDay = days.find((d) => d.iso === selectedDate);
+  const daySlots = activeDay?.slots ?? [];
+  const selectedSlot = selectedSlotId
+    ? slots?.find((s) => s.slot_id === selectedSlotId)
+    : null;
+
+  async function confirm() {
+    if (!selectedSlotId || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await api.bookSlot({
+        conversationId,
+        slotId: selectedSlotId,
+        vehicle: vehicleLabel,
+      });
+      onBooked(response.confirmation);
+    } catch (exception) {
+      setError(
+        exception instanceof Error
+          ? exception.message
+          : "Could not book that slot. It may have just been taken — please pick another.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="mt-6 overflow-hidden border border-ink bg-paper shadow-sm">
+      <header className="flex items-baseline justify-between border-b border-rule bg-offset px-5 py-3">
+        <div>
+          <p className="text-body font-medium">Pick a slot for your test drive</p>
+          <p className="mt-0.5 text-caption text-ink-faint">
+            {vehicleLabel} · 2-hour slot · Dubai time
+          </p>
+        </div>
+        {onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="text-caption text-ink-muted transition-colors hover:text-ink"
+          >
+            Cancel
+          </button>
+        )}
+      </header>
+
+      {slots === null && !error && (
+        <p className="px-5 py-12 text-center text-caption text-ink-faint">
+          Loading available slots…
+        </p>
+      )}
+
+      {slots && slots.length === 0 && !error && (
+        <p className="px-5 py-12 text-center text-caption text-ink-muted">
+          No slots available in the next two weeks. Please call the showroom.
+        </p>
+      )}
+
+      {days.length > 0 && (
+        <>
+          {/* ── Day strip ─────────────────────────────────────── */}
+          <div className="border-b border-rule px-5 pb-4 pt-5">
+            <p className="label mb-3">Choose a day</p>
+            <div className="flex gap-2 overflow-x-auto pb-2 [scrollbar-width:thin]">
+              {days.map((day) => {
+                const isActive = day.iso === selectedDate;
+                return (
+                  <button
+                    key={day.iso}
+                    type="button"
+                    onClick={() => {
+                      setSelectedDate(day.iso);
+                      setSelectedSlotId(null);
+                    }}
+                    className={`group relative flex min-w-[72px] flex-shrink-0 flex-col items-center gap-1
+                      border py-3 transition-all duration-200
+                      ${
+                        isActive
+                          ? "border-ink bg-ink text-paper shadow-md"
+                          : "border-rule bg-paper text-ink hover:-translate-y-0.5 hover:border-ink hover:shadow-sm"
+                      }`}
+                  >
+                    <span
+                      className={`text-[10px] uppercase tracking-widest ${
+                        isActive ? "text-paper/70" : "text-ink-faint"
+                      }`}
+                    >
+                      {day.day_short}
+                    </span>
+                    <span className="tabular text-title font-semibold">
+                      {day.day_number}
+                    </span>
+                    <span
+                      className={`text-caption ${
+                        isActive ? "text-paper/70" : "text-ink-muted"
+                      }`}
+                    >
+                      {day.month_short}
+                    </span>
+                    <span
+                      className={`tabular mt-1 text-[10px] ${
+                        isActive ? "text-paper/60" : "text-ink-faint"
+                      }`}
+                    >
+                      {day.slots.length} slot{day.slots.length === 1 ? "" : "s"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ── Time slot pills ─────────────────────────────── */}
+          <div className="px-5 py-5">
+            <p className="label mb-3">Choose a time · 2 hours each</p>
+            <div className="flex flex-wrap gap-2">
+              {daySlots.map((slot) => {
+                const isSelected = slot.slot_id === selectedSlotId;
+                const disabled = !slot.is_available;
+                return (
+                  <button
+                    key={slot.slot_id}
+                    type="button"
+                    onClick={() => setSelectedSlotId(slot.slot_id)}
+                    disabled={disabled || busy}
+                    className={`tabular relative rounded-none border px-4 py-2 font-mono text-caption transition-all duration-200
+                      ${
+                        isSelected
+                          ? "border-karva bg-karva text-paper shadow-sm"
+                          : disabled
+                            ? "border-rule bg-offset text-ink-faint line-through decoration-1"
+                            : "border-rule bg-paper text-ink hover:-translate-y-0.5 hover:border-ink hover:shadow-sm"
+                      }
+                      disabled:cursor-not-allowed`}
+                  >
+                    {slot.time_label}
+                    {isSelected && (
+                      <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-ink text-[9px] text-paper">
+                        ✓
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {daySlots.every((slot) => !slot.is_available) && (
+              <p className="mt-4 text-caption text-ink-muted">
+                Every slot on this day is taken. Pick another day above.
+              </p>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ── Confirm bar ─────────────────────────────────────── */}
+      <footer
+        className={`border-t px-5 py-4 transition-colors ${
+          selectedSlot ? "border-ink bg-karva-soft" : "border-rule bg-offset"
+        }`}
+      >
+        {error && (
+          <p className="mb-3 border-l-2 border-signal bg-paper px-4 py-2 text-caption text-signal">
+            {error}
+          </p>
+        )}
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <div>
+            {selectedSlot ? (
+              <>
+                <p className="text-body font-medium">
+                  {selectedSlot.day_label} · {selectedSlot.time_label}
+                </p>
+                <p className="mt-0.5 text-caption text-ink-muted">
+                  {vehicleLabel} · Dubai time
+                </p>
+              </>
+            ) : (
+              <p className="text-caption text-ink-muted">
+                Pick a day and a time to confirm.
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={confirm}
+            disabled={!selectedSlotId || busy}
+            className="bg-ink px-6 py-2.5 text-caption font-medium text-paper transition-opacity hover:opacity-85 disabled:opacity-30"
+          >
+            {busy ? "Booking…" : "Confirm booking"}
+          </button>
+        </div>
+      </footer>
+    </section>
+  );
+}

@@ -1,0 +1,82 @@
+# Alto AI Support Orchestrator — local development stack.
+#
+# Profiles:
+#   (default)  postgres, redis, qdrant   — the data plane, always started
+#   app        backend, frontend         — added in Modules 3 and 10
+#   ingest     ingestion worker          — added in Module 5 (one-shot job)
+#
+# Usage:
+#   docker compose up -d                 start the data plane
+#   docker compose ps                    check health
+#   docker compose down -v               stop and destroy volumes
+
+name: alto
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  postgres:
+    <<: *restart
+    image: postgres:16-alpine
+    container_name: alto-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-alto}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-alto}
+      POSTGRES_DB: ${POSTGRES_DB:-alto}
+      # Deterministic collation so ORDER BY is stable across host platforms.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-alto} -d ${POSTGRES_DB:-alto}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  redis:
+    <<: *restart
+    image: redis:7-alpine
+    container_name: alto-redis
+    # Short-term memory only — everything here is reconstructible, so an
+    # append-only file would cost write throughput for no durability benefit.
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  qdrant:
+    <<: *restart
+    # Pinned to 1.17.x: DBSF fusion, tunable RRF `k` and FormulaQuery all
+    # require it. See docs/REFERENCE_PATTERNS.md §1.4.
+    image: qdrant/qdrant:v1.17.0
+    container_name: alto-qdrant
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+      QDRANT__LOG_LEVEL: ${QDRANT_LOG_LEVEL:-INFO}
+    ports:
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      # The Qdrant image ships no curl/wget, so probe the TCP port directly
+      # via bash's /dev/tcp pseudo-device.
+      test: ["CMD-SHELL", "bash -c ': > /dev/tcp/127.0.0.1/6333'"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  postgres-data:
+  qdrant-data:
