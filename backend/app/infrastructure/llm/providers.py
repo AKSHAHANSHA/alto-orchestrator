@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel
 
@@ -32,6 +32,17 @@ JSON_INSTRUCTION = (
     "\n\nRespond with a single JSON object matching this schema exactly. "
     "Emit no prose, no markdown fences, and no commentary.\n{schema}"
 )
+
+
+def _accepts_custom_temperature(model: str) -> bool:
+    """Whether the model lets us set `temperature` to something other than 1.
+
+    The gpt-5 family accepts only the default temperature (1); passing any
+    other value returns a 400 with `unsupported_value`. Every earlier model
+    let us dial it down to 0 for deterministic extraction. Detection is
+    prefix-based so future gpt-5-x variants are covered without a code edit.
+    """
+    return not model.startswith("gpt-5")
 
 
 class OpenAIProvider:
@@ -58,16 +69,20 @@ class OpenAIProvider:
         max_tokens: int | None = None,
     ) -> LLMResponse:
         model = self.model_for(tier)
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        if _accepts_custom_temperature(model):
+            kwargs["temperature"] = temperature
+
         try:
-            response = await self._client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+            response = await self._client.chat.completions.create(**kwargs)
         except Exception as exc:
             raise LLMError(f"OpenAI completion failed: {exc}", model=model) from exc
 
@@ -93,16 +108,19 @@ class OpenAIProvider:
         temperature: float = 0.0,
     ) -> StructuredResponse[SchemaT]:
         model = self.model_for(tier)
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "response_format": schema,
+        }
+        if _accepts_custom_temperature(model):
+            kwargs["temperature"] = temperature
+
         try:
-            response = await self._client.beta.chat.completions.parse(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                response_format=schema,
-                temperature=temperature,
-            )
+            response = await self._client.beta.chat.completions.parse(**kwargs)
             parsed = response.choices[0].message.parsed
         except Exception as exc:
             raise StructuredOutputError(
@@ -131,15 +149,19 @@ class OpenAIProvider:
     async def stream(
         self, *, system: str, user: str, tier: ModelTier, temperature: float = 0.0
     ) -> AsyncIterator[str]:
-        stream = await self._client.chat.completions.create(
-            model=self.model_for(tier),
-            messages=[
+        model = self.model_for(tier)
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            temperature=temperature,
-            stream=True,
-        )
+            "stream": True,
+        }
+        if _accepts_custom_temperature(model):
+            kwargs["temperature"] = temperature
+
+        stream = await self._client.chat.completions.create(**kwargs)
         async for chunk in stream:
             delta = chunk.choices[0].delta.content
             if delta:

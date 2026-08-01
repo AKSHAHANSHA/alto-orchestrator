@@ -368,6 +368,79 @@ Live testing surfaced four real defects. All fixed.
   on the left and close/reassign actions on the right. Everything gets
   breathing room.
 
+## 2026-08-01 — Fast-tier model swap: gpt-4o-mini → gpt-5-mini
+
+### What changed
+- `openai_fast_model` default in `core/settings.py`, `.env.example`, and
+  the user's `.env`: `gpt-4o-mini` → `gpt-5-mini`. Premium tier (`gpt-4o`)
+  unchanged.
+- Added a `gpt-5-mini` entry to the `PRICING` table in
+  `infrastructure/llm/registry.py`, marked with a comment that the rate
+  is a placeholder pending verification against OpenAI's current list
+  price — the BudgetGuard uses this number directly for spend tracking.
+
+### Bug this surfaced: gpt-5 family rejects custom temperature
+- **Symptom**: every OpenAI call failed with `400 Unsupported value:
+  'temperature' does not support 0.0 with this model. Only the default
+  (1) value is supported.` — three of the four integration tests hitting
+  live OpenAI failed immediately.
+- **Root cause**: the provider adapter unconditionally passed
+  `temperature=0.0` (structured extraction) or `0.3` (generation) on
+  every call. gpt-5-mini only accepts the default temperature (1);
+  passing anything else is a hard 400, not a warning.
+- **Fix**: `_accepts_custom_temperature(model)` in
+  `infrastructure/llm/providers.py` — prefix-checks for `gpt-5`, and all
+  three OpenAI methods (`complete`, `complete_structured`, `stream`) omit
+  the `temperature` kwarg entirely when the model doesn't accept it,
+  rather than sending a value OpenAI will reject. Future gpt-5-x variants
+  are covered without a further code change.
+- This fix is model-detection based, not provider-wide — Anthropic and
+  older OpenAI models are unaffected and still get explicit temperature
+  control.
+
+### Observed behavior difference — worth knowing before relying on this
+Live smoke test (mixed-intent message, real API):
+
+| Node | Model | Tokens in | Tokens out | Latency | Cost |
+|---|---|---|---|---|---|
+| discover_intents | gpt-5-mini | 943 | 350 | 9.9s | $0.00094 |
+| extract_entities | gpt-5-mini | 863 | **1,145** | 22.4s | $0.00251 |
+| score_sentiment | gpt-5-mini | 225 | 296 | 8.8s | $0.00065 |
+
+Compare to typical `gpt-4o-mini` behavior on the same three calls: low
+single-digit-second latency, completion tokens roughly matching the size
+of the structured output (tens to low hundreds of tokens, not over a
+thousand).
+
+**Interpretation**: gpt-5-mini appears to be a reasoning-family model that
+spends completion tokens on internal chain-of-thought before emitting the
+final structured object — tokens that are billed but never surface in the
+parsed result. This is consistent with the disproportionately high
+completion-token count on `extract_entities` (a task that should produce
+a handful of short fields) and the 3-8x latency increase across all three
+parallel fast-tier calls.
+
+**Not diagnosed as a bug** — the pipeline is correct, all three intents
+extracted at 0.9 confidence, cost per turn is still a fraction of a cent
+($0.00409 total for a 3-intent message across 3 LLM calls). But the
+**fast tier is no longer fast** in wall-clock terms, and the per-request
+cost is roughly 4-6x gpt-4o-mini's list price for the same task shape.
+This tradeoff should be weighed once Module 14's golden set exists and
+can measure whether the accuracy gain (if any) justifies the latency and
+cost increase for a tier whose entire design purpose was "cheap and fast
+enough to run three times in parallel every turn."
+
+### Tests and gates
+- 199 backend tests pass live against `gpt-5-mini` (was intermittently
+  failing before the temperature fix — see above).
+- ruff clean, mypy strict clean.
+- Also fixed, unrelated pre-existing lint/type debt found while in the
+  area: renamed `SlotUnavailable` → `SlotUnavailableError` (N818), three
+  en-dash-in-string/comment violations in `appointments.py` (RUF001/003),
+  an unnecessary list comprehension in `runtime.py` (C416), and two mypy
+  narrowing issues (`_CatalogLookupPort | None` closure capture,
+  `Any`-return in `_resolve_previous_awaiting`).
+
 ### Calendar UX rebuilt as day-first, then time-first
 - Reference model was the classic date-picker → time-slot-pills pattern. Adopted the pattern; kept our Swiss discipline.
 - **Day strip** at the top: horizontal-scroll pills, each showing weekday initials over the day-of-month over month-abbr. Selected day fills with ink; unselected has a hairline border and lifts on hover (`-translate-y-0.5`). Each pill also shows the slot count for that day.

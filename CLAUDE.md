@@ -24,9 +24,15 @@ routing, hybrid retrieval, structured memory and explainability.
 - **Frontend**: Next.js 15 App Router, React 19, TypeScript strict,
   Tailwind, TanStack Query.
 - **Data plane**: PostgreSQL 16, Redis 7, Qdrant v1.17.
-- **Models**: OpenAI (fast: gpt-4o-mini, premium: gpt-4o), Anthropic
+- **Models**: OpenAI (fast: **gpt-5-mini**, premium: gpt-4o), Anthropic
   (fast: claude-haiku-4-5-20251001, premium: claude-opus-5), Mock
-  (deterministic, keyless). All behind one `LLMProvider` port.
+  (deterministic, keyless). All behind one `LLMProvider` port. Note:
+  gpt-5-mini rejects any non-default `temperature` (400 error) — the
+  OpenAI adapter detects `gpt-5*` models and omits the param for them.
+  gpt-5-mini also runs noticeably slower (8-22s per fast-tier call vs
+  gpt-4o-mini's low single digits) and produces high completion-token
+  counts on simple extraction tasks, consistent with reasoning-model
+  behavior. See `completed_work.md` 2026-08-01 for measured numbers.
 - **Retrieval**: Qdrant hybrid RRF (dense multilingual +
   BM25 sparse with IDF modifier) plus cross-encoder rerank
   (English-only — Arabic queries preserve RRF order).
@@ -76,5 +82,12 @@ Whatever the user asks. If nothing pending, likely candidates:
 
 ## Last updated
 
-**2026-08-01** — initial memory system created after landing/workflow
-split, policy-corpus expansion, and Postgres catalog wiring.
+**2026-08-01** — fast-tier model swapped to gpt-5-mini; fixed a
+temperature-parameter incompatibility this surfaced in the OpenAI
+adapter. Also: generator transcript-context bug fixed (LLM was writing
+stock filler because `_rebuild_conversation` dropped the transcript),
+operator queue re-enqueue fixed (customer replies after handoff weren't
+reaching the operator), operator UI reworked to full-width chat with
+metadata stacked below, test-drive booking calendar added with Dubai-
+timezone-consistent formatting, dealership address corrected to Legend
+Motors — Showroom #46, Ras Al Khor.

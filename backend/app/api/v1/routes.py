@@ -37,7 +37,7 @@ from app.core.errors import AltoError, ToolError
 from app.core.logging import get_logger
 from app.domain.enums import Department, EntityType, IntentCategory, ReviewOutcome
 from app.graph.state import initial_state
-from app.services.execution.appointments import SlotUnavailable
+from app.services.execution.appointments import SlotUnavailableError
 from app.services.execution.finance_tools import EmiRequest, calculate_emi
 from app.services.execution.valuation_tools import ValuationRequest, estimate_trade_in
 
@@ -288,7 +288,7 @@ def _resolve_previous_awaiting(state: Any) -> str | None:
         return None
     for intent in state.intents.unresolved:
         if intent.missing_slots:
-            return intent.missing_slots[0].value
+            return str(intent.missing_slots[0].value)
     return None
 
 
@@ -564,7 +564,7 @@ async def book_slot(payload: dict[str, Any], request: Request) -> dict[str, Any]
             customer_name=customer_name,
             contact_phone=contact_phone,
         )
-    except SlotUnavailable as exc:
+    except SlotUnavailableError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     confirmation = (

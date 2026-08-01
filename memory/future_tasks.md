@@ -5,6 +5,24 @@ date rather than removing them, so future sessions can see history.
 
 ## High priority
 
+### H-6 — Decide gpt-5-mini vs gpt-4o-mini for the fast tier
+Swapped 2026-08-01 (see decisions.md D-013). gpt-5-mini is 4-6x the
+per-call cost and 3-8x the latency of gpt-4o-mini on the same
+structured-extraction task shape, consistent with reasoning-model
+chain-of-thought overhead. Cost per turn is still trivial in absolute
+terms (~$0.004), but the fast tier's whole design premise was "cheap and
+quick enough to run three parallel calls every turn" — worth revisiting
+once Module 14 (H-1) can measure whether gpt-5-mini's presumed accuracy
+edge is real and big enough to justify the tradeoff. One-line revert in
+`.env` if not.
+
+### H-7 — Verify gpt-5-mini pricing in registry.py
+The `PRICING["gpt-5-mini"]` entry in `infrastructure/llm/registry.py` is
+an estimate, not sourced from OpenAI's published rate card. The
+BudgetGuard uses this number directly for spend tracking and tier
+demotion — a wrong number silently mis-tracks the daily budget. Check
+against OpenAI's current pricing page and correct if needed.
+
 ### H-1 — Module 14: evaluation service
 Build the harness that measures the metrics named in the spec.
 

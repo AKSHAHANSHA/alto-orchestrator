@@ -224,3 +224,51 @@ with a `> **Synthetic content.**` disclaimer.
 **Reasoning**: The corpus was the primary bottleneck. Waiting produces no
 value; authoring produces a working demo. Each document is versioned and
 can be replaced with a real one when supplied.
+
+## 2026-08-01
+
+### D-013 — Fast tier moved to gpt-5-mini, model-aware temperature handling
+
+**Problem**: User requested trying `gpt-5-mini` as the fast-tier model
+(was `gpt-4o-mini`) based on external research into two-stage LLM
+pipelines. First live call failed: gpt-5-mini rejects any `temperature`
+value other than the default (1) — a hard 400, not a warning. Every fast-
+tier call in the pipeline passed an explicit temperature (0.0 for
+structured extraction, 0.3 for generation), so the entire understanding
+layer broke on the swap.
+
+**Options**:
+1. Revert to gpt-4o-mini.
+2. Strip `temperature` from every OpenAI call unconditionally.
+3. Detect gpt-5-family models by name prefix and omit `temperature` only
+   for those; keep explicit temperature control for every other model.
+
+**Chosen**: Option 3. `_accepts_custom_temperature(model)` in
+`infrastructure/llm/providers.py`, checked in `complete`,
+`complete_structured`, and `stream`.
+
+**Reasoning**: Option 1 abandons the thing being tried. Option 2 silently
+removes determinism control from every current and future non-gpt-5
+model for no reason — gpt-4o-mini, gpt-4o and Anthropic models all
+support and benefit from `temperature=0` on structured extraction (more
+consistent JSON, less variance in intent/entity output). Prefix detection
+is cheap, obviously correct, and automatically covers future gpt-5-x
+variants without another code change.
+
+**Tradeoff surfaced, not yet acted on**: gpt-5-mini is measurably slower
+(8-22s vs. low single digits per fast-tier call) and produces
+disproportionately high completion-token counts on short structured-
+extraction tasks — consistent with a reasoning model spending tokens on
+internal chain-of-thought before the final JSON. Cost per full 3-intent
+turn was still under a cent ($0.00409), so this is not a cost-blocking
+issue, but the fast tier's entire design premise — "cheap and quick
+enough to run three times in parallel every turn" — is weaker at 8-22s
+per call than it was at gpt-4o-mini's speed. Decision on whether to keep
+gpt-5-mini, revert, or make the fast-tier model itself configurable per
+deployment is deferred until Module 14's golden set can measure whether
+gpt-5-mini's presumed reasoning-quality advantage actually improves
+intent/entity accuracy enough to justify the latency and per-call cost
+increase (~4-6x gpt-4o-mini's list price for the same task shape).
+The pricing entry added for gpt-5-mini in `registry.py` is an estimate,
+not verified against OpenAI's current published rate — flagged in a
+comment there and in `future_tasks.md`.

@@ -125,12 +125,13 @@ class ToolRunner:
         surface the corpus; the "we do not stock that" honesty just isn't
         available until the DB comes back.
         """
-        assert self._catalog_lookup_service is not None
+        lookup_service = self._catalog_lookup_service
+        assert lookup_service is not None
         result: dict[str, Any] = {}
 
         async def _safe_lookup(brand: str, model: str, year: int | None) -> Any:
             try:
-                return await self._catalog_lookup_service.lookup(brand, model, year)
+                return await lookup_service.lookup(brand, model, year)
             except Exception as exc:
                 logger.warning("catalog_lookup_failed", error=str(exc))
                 return None
@@ -471,8 +472,7 @@ Preserve the disclaimer. Return only the Arabic text."""
         # Enumerate intents with what's still missing so the model can pick
         # the next question or action rather than describe intents in the
         # abstract.
-        open_intents = [i for i in conversation.intents.unresolved]
-        if open_intents:
+        if conversation.intents.unresolved:
             lines.append("## Open requests and what is still missing")
             for intent in conversation.intents.ordered():
                 label = intent.category.value.replace("_", " ")

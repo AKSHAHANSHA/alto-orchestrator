@@ -71,8 +71,8 @@ class SlotOption:
     day_number: str       # "03"
     month_short: str      # "Aug"
     day_label: str        # "Sun 03 Aug"
-    time_label: str       # "09:00–11:00"
-    iso_date: str         # "2026-08-03" — for grouping
+    time_label: str       # "09:00-11:00"
+    iso_date: str         # "2026-08-03" - for grouping
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -109,7 +109,7 @@ class Booking:
 
     @property
     def time_label(self) -> str:
-        return f"{self.slot_start.strftime('%H:%M')}–{self.slot_end.strftime('%H:%M')}"
+        return f"{self.slot_start.strftime('%H:%M')}-{self.slot_end.strftime('%H:%M')}"
 
     @property
     def slot_label(self) -> str:
@@ -200,7 +200,7 @@ class AppointmentService:
                         month_short=start_dt.strftime("%b"),
                         day_label=start_dt.strftime("%a %d %b"),
                         time_label=(
-                            f"{start_dt.strftime('%H:%M')}–{end_dt.strftime('%H:%M')}"
+                            f"{start_dt.strftime('%H:%M')}-{end_dt.strftime('%H:%M')}"
                         ),
                         iso_date=start_dt.strftime("%Y-%m-%d"),
                     )
@@ -221,12 +221,12 @@ class AppointmentService:
     ) -> Booking:
         """Take a slot for a customer.
 
-        Raises `SlotUnavailable` if the slot has already been taken (or
+        Raises `SlotUnavailableError` if the slot has already been taken (or
         doesn't parse). The frontend should refresh its slot list on that
         exception and let the customer pick again.
         """
         if slot_id in self._slot_to_booking:
-            raise SlotUnavailable(
+            raise SlotUnavailableError(
                 f"Slot {slot_id} has just been booked by someone else."
             )
 
@@ -238,7 +238,7 @@ class AppointmentService:
                 slot_id.removeprefix("slot_"), "%Y%m%dT%H%M"
             ).replace(tzinfo=DEALER_TZ)
         except ValueError as exc:
-            raise SlotUnavailable(f"Unrecognised slot id: {slot_id}") from exc
+            raise SlotUnavailableError(f"Unrecognised slot id: {slot_id}") from exc
 
         end = start + timedelta(hours=SLOT_HOURS)
         booking = Booking(
@@ -277,5 +277,5 @@ class AppointmentService:
         return self._bookings.get(booking_id)
 
 
-class SlotUnavailable(RuntimeError):
+class SlotUnavailableError(RuntimeError):
     """Raised when a booking attempt finds the slot already taken."""
