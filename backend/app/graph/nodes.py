@@ -28,7 +28,7 @@ from app.domain.value_objects import TokenUsage
 from app.graph.state import GraphState
 from app.services.decision import confidence as confidence_engine
 from app.services.decision.router import route
-from app.services.execution.grounding import validate_grounding
+from app.services.execution.grounding import vacuously_grounded, validate_grounding
 from app.services.planning.planner import build_plan, enrich, recompute_missing_slots
 
 logger = get_logger(__name__)
@@ -396,6 +396,19 @@ def build_nodes(deps: Any) -> dict[str, NodeFn]:
                 ]
             }
 
+        # A turn that is purely social has no factual content to check. Running
+        # the corpus-overlap test on "Good morning! How can I help?" scored it
+        # zero against a corpus of finance documents and escalated a greeting
+        # to a human — the check reporting a problem it had invented.
+        if _is_only_small_talk(state):
+            return {
+                "grounding": vacuously_grounded(),
+                "spans": [
+                    _span(state, "validate_grounding", CognitiveLayer.EXECUTION, started,
+                          skipped="nothing asserted", verdict="grounded")
+                ],
+            }
+
         report = validate_grounding(
             draft.en, state.get("chunks", ()), state.get("tool_results", {})
         )
@@ -472,6 +485,19 @@ def build_nodes(deps: Any) -> dict[str, NodeFn]:
         "escalate_human": escalate_human,
         "persist_memory": persist_memory,
     }
+
+
+def _is_only_small_talk(state: GraphState) -> bool:
+    """Whether this turn is social and nothing else.
+
+    Deliberately strict: one real request alongside the greeting and the whole
+    reply is validated as normal. Hours and location are *not* small talk —
+    they are factual answers that must stay grounded in the corpus.
+    """
+    unresolved = state["intents"].unresolved
+    return bool(unresolved) and all(
+        intent.category is IntentCategory.SMALL_TALK for intent in unresolved
+    )
 
 
 def _rebuild_conversation(state: GraphState) -> ConversationState:

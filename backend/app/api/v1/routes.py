@@ -53,6 +53,16 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1")
 
+# What the customer sees while a colleague reviews the drafted reply. Says
+# what is happening without promising what the answer will be — the reviewer
+# has not decided yet, and a holding message that pre-empts them would be a
+# second unapproved reply in disguise.
+HOLDING_MESSAGE_EN = (
+    "Thanks — I'm checking this with a colleague and will come back to you "
+    "shortly."
+)
+HOLDING_MESSAGE_AR = "شكراً — أراجع هذا مع أحد الزملاء وسأعود إليك قريباً."
+
 
 def _container(request: Request) -> Any:
     return request.app.state.container
@@ -133,6 +143,28 @@ async def submit_inquiry(payload: InquiryRequest, request: Request) -> InquiryRe
         await container.memory.append_turn(conversation_id, "assistant", draft.en)
 
     response = _to_response(result, conversation_id, trace_id)
+
+    # An escalated draft belongs to the reviewer, not the customer. It used to
+    # be returned anyway and never written to the transcript, so the customer
+    # read a full answer that vanished the moment they navigated away — the
+    # reply appearing to leave the chat. Now they get an acknowledgement, and
+    # it is persisted like any other turn so it survives a reload. The draft
+    # itself still reaches the operator through the review queue.
+    if result.get("escalated"):
+        response = response.model_copy(
+            update={
+                "reply": ReplyDTO(
+                    en=HOLDING_MESSAGE_EN,
+                    ar=HOLDING_MESSAGE_AR if draft and draft.is_bilingual else None,
+                    is_bilingual=bool(draft and draft.is_bilingual),
+                    requires_human_approval=True,
+                )
+            }
+        )
+        await container.memory.append_turn(
+            conversation_id, "assistant", HOLDING_MESSAGE_EN
+        )
+        return response
 
     # Detect a booking-ready state and replace the reply with a call to
     # show the calendar. The customer picks a slot inline instead of the

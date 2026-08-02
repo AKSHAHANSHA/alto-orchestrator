@@ -751,3 +751,65 @@ provider now short-circuits the clarifier too, restoring the determinism
 guarantee its docstring promises.
 
 234 tests pass, ruff clean, mypy strict clean.
+
+## 2026-08-02 — A greeting was being escalated to a human
+
+Reported: "Good morning" produced a drafted reply, confidence 67, escalated
+with reason *grounding failed*, and the reply then vanished from the chat on
+navigating away.
+
+### The score was never the deciding factor
+67 is below both thresholds (75 premium / 90 auto), but that is beside the
+point — the escalation reason was a grounding failure, which is a hard
+override. The reply would have escalated at 95 too.
+
+### Why grounding failed on a greeting
+`validate_grounding` treats every non-boilerplate sentence as a factual claim
+to be supported by corpus overlap. Decomposing the reply gave:
+
+| sentence | verdict |
+|---|---|
+| "Good morning!" | boilerplate, skipped |
+| "It's currently 09:00." | unsupported |
+| "How can I assist you today with your vehicle needs?" | unsupported |
+
+Faithfulness 0.0 → UNGROUNDED → retry → fail again → human. The check was
+reporting a problem it had invented: a *question* is not an assertion, and a
+greeting has nothing to be wrong about.
+
+**Three fixes, layered:**
+1. `_is_question` — sentences ending in `?` or `؟` are excluded from claims.
+   Asking for information is the opposite of asserting it.
+2. `_is_only_small_talk` in the `validate` node — a turn whose every
+   unresolved intent is `SMALL_TALK` skips validation and takes
+   `vacuously_grounded()`. Deliberately strict: one real request alongside
+   the greeting and the whole reply is validated as normal. `GENERAL_INFO`
+   (hours, location) is *not* small talk and stays grounded.
+3. The generator system prompt now forbids stating the current time or date.
+
+### The model had invented the clock
+Nothing in the codebase injects a clock — `grep` for time injection into the
+generator prompt returns nothing. "It's currently 09:00" was a hallucination,
+and grounding was right to flag it. It still does: the unit tests pin that an
+invented clock remains ungrounded even after the question fix. The prompt
+change removes it at source.
+
+*(Correcting an earlier claim made in conversation that date/time is injected
+into the system prompt — it is not.)*
+
+### The vanishing reply
+`routes.py` returned `draft.en` to the customer on every path but only wrote
+it to the transcript when the run was *not* escalated. So the customer read a
+full answer that existed nowhere on the server, and it disappeared on reload.
+
+The architecture's own rule is that a reviewer decides what the customer
+sees, so returning the unapproved draft was the bug — not the missing write.
+Escalated turns now return a holding message ("checking this with a
+colleague") which *is* persisted, so what is shown and what is stored are the
+same thing. The draft still reaches the operator through the review queue.
+
+Verified live: "Good morning" → `small_talk`, grounding `grounded` with zero
+claims, `escalated: False`, reply "Good morning! How can I assist you today?"
+with no invented time, and present in the stored transcript.
+
+244 tests pass, ruff clean, mypy strict clean.

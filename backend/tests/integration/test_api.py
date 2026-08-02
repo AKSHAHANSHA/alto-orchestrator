@@ -515,3 +515,63 @@ class TestMultiIntentDoesNotCollapse:
             "booking a slot emptied the whole queue — the trade-in and "
             "financing requests were resolved without ever being answered"
         )
+
+
+class TestEscalatedRepliesSurviveNavigation:
+    """An escalated draft belongs to the reviewer, not the customer.
+
+    It used to be returned to the customer anyway and never written to the
+    transcript, so the answer they had just read vanished the moment they
+    navigated away and the page restored from the server.
+    """
+
+    async def test_whatever_the_customer_is_shown_is_also_stored(
+        self, client: AsyncClient
+    ) -> None:
+        conversation_id = "conv_escalation_persists"
+        body = (
+            await client.post(
+                "/api/v1/inquiries",
+                json={
+                    "message": (
+                        "This is completely unacceptable, I want a manager now."
+                    ),
+                    "channel": "whatsapp",
+                    "conversation_id": conversation_id,
+                },
+            )
+        ).json()
+
+        assert body["escalated"], "a complaint must reach a person"
+        shown = body["reply"]["en"]
+
+        stored = (
+            await client.get(f"/api/v1/conversations/{conversation_id}")
+        ).json()
+        assistant_turns = [
+            t["text"] for t in stored["transcript"] if t["role"] == "assistant"
+        ]
+
+        assert shown in assistant_turns, (
+            "the customer was shown a reply that was never written to the "
+            "transcript, so it disappears on reload:\n" + shown
+        )
+
+    async def test_the_unapproved_draft_itself_is_not_sent(
+        self, client: AsyncClient
+    ) -> None:
+        body = (
+            await client.post(
+                "/api/v1/inquiries",
+                json={
+                    "message": "This is terrible service, get me a manager.",
+                    "channel": "whatsapp",
+                },
+            )
+        ).json()
+
+        assert body["escalated"]
+        assert body["reply"]["requires_human_approval"] is True
+        # The holding message says a colleague is looking at it — it must not
+        # pre-empt the reviewer by answering the question itself.
+        assert "colleague" in body["reply"]["en"].lower()

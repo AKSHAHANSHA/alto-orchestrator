@@ -40,6 +40,17 @@ def _is_boilerplate(sentence: str) -> bool:
     return len(lowered) < 15 or any(marker in lowered for marker in BOILERPLATE)
 
 
+def _is_question(sentence: str) -> bool:
+    """Questions assert nothing, so there is nothing in them to support.
+
+    Counting them as claims is how "How can I assist you today with your
+    vehicle needs?" became an unsupported claim against a corpus of finance
+    documents, dragging a greeting to zero faithfulness and escalating it to
+    a human. Asking for information is the opposite of asserting it.
+    """
+    return sentence.rstrip().endswith(("?", "؟"))
+
+
 def _numbers_in(text: str) -> set[str]:
     """Bare digit sequences, normalised so 150,000 and 150000 compare equal."""
     return {
@@ -73,6 +84,19 @@ def _tool_numbers(tool_results: dict[str, Any]) -> set[str]:
     return numbers
 
 
+def vacuously_grounded() -> GroundingReport:
+    """A pass for a reply that asserts nothing.
+
+    Not a bypass: the same verdict `validate_grounding` already returns when a
+    draft decomposes to zero claims. Callers use it when they know up front
+    that a turn carries no factual content, rather than paying for a check
+    whose only possible finding would be wrong.
+    """
+    return GroundingReport(
+        verdict=GroundingVerdict.GROUNDED, claims=(), faithfulness_score=1.0
+    )
+
+
 def validate_grounding(
     draft: str,
     chunks: tuple[RetrievedChunk, ...],
@@ -93,7 +117,7 @@ def validate_grounding(
     claims: list[Claim] = []
 
     for sentence in sentences:
-        if _is_boilerplate(sentence):
+        if _is_boilerplate(sentence) or _is_question(sentence):
             continue
 
         is_numeric = bool(MONEY_PATTERN.search(sentence))
