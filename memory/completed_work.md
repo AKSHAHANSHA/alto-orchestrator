@@ -660,3 +660,42 @@ Gemini's 6001ms timeout on the same node, roughly a 47x improvement.
 
 241 tests pass, ruff clean, mypy strict clean, and mypy still passes with
 `google-genai` uninstalled — proving nothing imports it.
+
+## 2026-08-02 — Switched clarification to llama-3.3-70b-versatile
+
+Moved from `llama-3.1-8b-instant` after seeing 8B's wording live: it never
+acknowledged the conversation's second open intent, and one production
+reply read "**I'm interested in** the test drive for the 2016 Renzo S5" —
+the dealership speaking as if it were the customer.
+
+### 70B exposed a prompt bug that 8B had been hiding
+Its first outputs read:
+> "I will come back to your other requests, including **the test drive
+> booking** and **financing EMI**"
+
+Two faults, both in `_build_context`, neither the model's:
+1. The intent owning the slot being asked about was still listed under
+   "Other open requests" — so the reply asked for a test-drive date while
+   describing the test drive as something to come back to later.
+2. Intent categories were rendered as `category.value.replace("_"," ")`,
+   putting the raw enum name "financing emi" in front of a customer.
+
+**Fixed**: `_build_context` now takes `asked_slot` and filters it out of
+every intent's remaining slots, dropping intents left with nothing; and
+`_INTENT_LABELS` maps categories to customer-facing phrases ("financing",
+"the trade-in") with the old behaviour as the fallback for anything
+unmapped.
+
+After: *"Which day would suit you for the test drive of the 2016 Renzo S5?
+I will also come back to your financing inquiry regarding the down
+payment."*
+
+Worth noting the general lesson: the weaker model was not producing worse
+output so much as **surfacing prompt defects the stronger one papered
+over**. The bug was there the whole time.
+
+`groq_model` default and `.env.example` moved to 70B so the shipped
+default matches what is deployed. 8B stays documented as the
+higher-quota, ~100ms-faster fallback.
+
+231 tests pass, ruff clean, mypy strict clean.

@@ -83,7 +83,12 @@ class Settings(BaseSettings):
     # because it is free at this volume and fast enough to sit on the
     # critical path.
     groq_api_key: str = ""
-    groq_model: str = "llama-3.1-8b-instant"
+    # 70B rather than `llama-3.1-8b-instant`: measured at the same 100%
+    # acceptance rate and still well under a second, but it acknowledges the
+    # conversation's *other* open requests, which 8B never does. 8B remains
+    # the fallback worth switching to if the free daily token budget bites —
+    # it is roughly 100ms faster and has a much larger allowance.
+    groq_model: str = "llama-3.3-70b-versatile"
     # Groq answers this prompt in well under a second, so a short ceiling
     # costs nothing when the model is healthy and saves the customer a long
     # stall when it is not. The previous 6s default was tuned for Gemini,

@@ -27,6 +27,7 @@ from typing import Any, Protocol
 
 from app.core.logging import get_logger
 from app.domain.entities import ConversationState
+from app.domain.enums import EntityType, IntentCategory
 from app.domain.policies import intent_policy
 from app.domain.ports import LLMResponse
 from app.domain.value_objects import DraftReply, LanguageProfile, Plan, TokenUsage
@@ -148,6 +149,7 @@ class ClarificationWriter:
                     spec_line=spec_line,
                     availability=availability,
                     conversation=conversation,
+                    asked_slot=slot,
                     bilingual=bilingual,
                 ),
             )
@@ -290,12 +292,35 @@ def _text_or_none(value: Any) -> str | None:
     return str(value) if value else None
 
 
+_INTENT_LABELS: dict[IntentCategory, str] = {
+    IntentCategory.TEST_DRIVE_BOOKING: "the test drive",
+    IntentCategory.FINANCING_EMI: "financing",
+    IntentCategory.TRADE_IN_VALUATION: "the trade-in",
+    IntentCategory.VEHICLE_AVAILABILITY_INFO: "availability",
+    IntentCategory.PRICING_OFFERS: "pricing",
+    IntentCategory.SERVICE_AFTERSALES: "service",
+    IntentCategory.COMPLAINT_ESCALATION: "the complaint",
+    IntentCategory.GENERAL_INFO: "the general enquiry",
+}
+
+
+def _label(category: IntentCategory) -> str:
+    """A phrase a customer would recognise.
+
+    The raw enum value leaks otherwise. A smaller model handed
+    "financing_emi" writes "financing EMI" straight into the reply, which is
+    internal vocabulary appearing in front of a customer.
+    """
+    return _INTENT_LABELS.get(category, category.value.replace("_", " "))
+
+
 def _build_context(
     *,
     template_en: str,
     spec_line: str | None,
     availability: str | None,
     conversation: ConversationState,
+    asked_slot: EntityType | None,
     bilingual: bool,
 ) -> str:
     lines = ["## What you must ask for", template_en]
@@ -313,13 +338,19 @@ def _build_context(
     if availability:
         lines += ["\n## Availability", availability]
 
-    others = [
-        f"- {i.category.value.replace('_', ' ')} — still need: "
-        + ", ".join(s.value.replace("_", " ") for s in i.missing_slots)
-        for i in conversation.intents.ordered()
-        if i.missing_slots
-    ]
-    if len(others) > 1:
+    # Everything still outstanding *other than* the thing being asked for
+    # right now. Leaving the asked slot in this list made the model describe
+    # the test drive as one of the customer's "other requests" in the very
+    # sentence asking them to pick a test-drive date.
+    others: list[str] = []
+    for intent in conversation.intents.ordered():
+        remaining = [s for s in intent.missing_slots if s != asked_slot]
+        if not remaining:
+            continue
+        needs = ", ".join(s.value.replace("_", " ") for s in remaining)
+        others.append(f"- {_label(intent.category)} — still need: {needs}")
+
+    if others:
         lines += ["\n## Other open requests you may acknowledge briefly", *others]
 
     if conversation.transcript:

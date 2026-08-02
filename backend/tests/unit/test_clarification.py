@@ -248,3 +248,52 @@ class TestPromptContext:
         await write(ClarificationWriter(phraser), tool_results={})
 
         assert "Mention no vehicle" in (phraser.last_user_context or "")
+
+    async def test_the_slot_being_asked_about_is_not_also_an_other_request(
+        self,
+    ) -> None:
+        # The bug this pins: `preferred_date` appeared both as the thing to
+        # ask for *and* in the "other open requests" list, so the model wrote
+        # "which day suits you? I'll come back to your other requests,
+        # including the test drive booking" — in the same breath.
+        phraser = StubPhraser({"en": "Which day suits you?"})
+        await write(ClarificationWriter(phraser), tool_results=CATALOG_RESULTS)
+
+        # The only open intent needs exactly the slot being asked for, so
+        # there is nothing else outstanding and the section must not appear.
+        assert "## Other open requests" not in (phraser.last_user_context or "")
+
+    async def test_intent_labels_are_customer_facing_not_enum_values(self) -> None:
+        # "financing_emi" reached the customer as "financing EMI" — internal
+        # vocabulary in front of a buyer.
+        phraser = StubPhraser({"en": "Which day suits you?"})
+        writer = ClarificationWriter(phraser)
+        await writer.write(
+            plan=plan_missing(EntityType.PREFERRED_DATE),
+            language=None,
+            conversation=ConversationState(
+                conversation_id="conv_labels",
+                intents=IntentQueue(
+                    intents=(
+                        Intent(
+                            category=IntentCategory.TEST_DRIVE_BOOKING,
+                            confidence=0.9,
+                            missing_slots=(EntityType.PREFERRED_DATE,),
+                        ),
+                        Intent(
+                            category=IntentCategory.FINANCING_EMI,
+                            confidence=0.9,
+                            missing_slots=(EntityType.DOWN_PAYMENT,),
+                        ),
+                    )
+                ),
+            ),
+            tool_results=CATALOG_RESULTS,
+        )
+
+        context = phraser.last_user_context or ""
+        others = context.split("## Other open requests")[1]
+        assert "financing emi" not in context
+        assert "- financing — still need: down payment" in others
+        # The test drive is what we are asking about, not an "other" request.
+        assert "the test drive" not in others

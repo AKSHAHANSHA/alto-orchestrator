@@ -190,3 +190,29 @@ source" and ~39s latency, the Dockerfile's model pre-cache layer has been
 dropped or `FASTEMBED_CACHE_PATH` no longer matches between build and
 runtime. Retrieval degrading to nothing is silent — the node catches the
 exception and the conversation continues without evidence.
+
+### `update-traffic --to-revisions` silently pins the service off "latest"
+Cloud Run services default to routing traffic to `LATEST`, so a plain
+`gcloud run deploy` goes live immediately. But running
+`gcloud run services update-traffic --to-revisions=<name>=100` — as the
+cleanup step after a `--no-traffic --tag` test does — switches the service
+into *manual pinning*. From then on every deploy builds and creates a
+revision successfully while serving **0% of traffic**, and the only hint is
+one easily-missed line: "is serving 0 percent of traffic."
+
+This happened on 2026-08-02: a full day of work deployed cleanly and none
+of it was live.
+
+**Check** after any deploy:
+```
+gcloud run services describe alto-orchestrator-backend --region=us-central1 --format="value(status.traffic)"
+```
+If it names a specific revision rather than `LATEST`, traffic is pinned.
+
+**Fix / restore auto-routing**:
+```
+gcloud run services update-traffic alto-orchestrator-backend --region=us-central1 --to-latest
+```
+
+Prefer `--to-latest` over `--to-revisions` whenever cleaning up a tagged
+test revision, so the service returns to its default behaviour.
