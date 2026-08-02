@@ -705,19 +705,17 @@ class MemoryService:
         # prior transcript — so without this merge, the transcript would be
         # wiped every message and only show the current turn.
         previous = self._conversations.get(conversation.conversation_id)
-        if previous and previous.transcript and not conversation.transcript:
+        if previous and previous.transcript:
+            # ``append_turn`` is the only writer of the transcript. The graph
+            # receives a snapshot of it and hands the same tuple back
+            # untouched, so the stored copy is never behind the one returning
+            # from the graph — concatenating the two appended every turn
+            # twice, which only became visible once the customer navigated
+            # away and the page restored from the server.
             conversation = conversation.model_copy(
                 update={
                     "transcript": previous.transcript,
                     "turn_count": previous.turn_count,
-                }
-            )
-        elif previous and previous.transcript:
-            # Both had turns; concatenate in chronological order.
-            conversation = conversation.model_copy(
-                update={
-                    "transcript": previous.transcript + conversation.transcript,
-                    "turn_count": previous.turn_count + len(conversation.transcript),
                 }
             )
         self._conversations[conversation.conversation_id] = conversation

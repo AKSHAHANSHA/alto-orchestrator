@@ -130,13 +130,27 @@ async def submit_inquiry(payload: InquiryRequest, request: Request) -> InquiryRe
     # show the calendar. The customer picks a slot inline instead of the
     # assistant asking for a date and time in words.
     if _should_show_calendar(result):
+        # Carry the graph's own reply through instead of discarding it. It
+        # holds the vehicle's availability and specs and whatever other open
+        # requests are still outstanding; replacing it outright meant a
+        # booking-ready message showed the customer nothing but the picker.
+        prologue = (
+            draft.en.strip()
+            if draft is not None and not result.get("escalated")
+            else ""
+        )
+        call_to_action = (
+            "Perfect — pick a 2-hour slot for your test drive "
+            "using the calendar below."
+        )
         response = response.model_copy(
             update={
                 "awaiting": "test_drive_slot",
                 "reply": ReplyDTO(
                     en=(
-                        "Perfect — pick a 2-hour slot for your test drive "
-                        "using the calendar below."
+                        f"{prologue}\n\n{call_to_action}"
+                        if prologue
+                        else call_to_action
                     ),
                     ar=None,
                     is_bilingual=False,
@@ -144,8 +158,10 @@ async def submit_inquiry(payload: InquiryRequest, request: Request) -> InquiryRe
                 ),
             }
         )
+        # Only the call to action goes to the transcript — the prologue was
+        # already appended above, and appending it again would repeat it.
         await container.memory.append_turn(
-            conversation_id, "assistant", response.reply.en if response.reply else ""
+            conversation_id, "assistant", call_to_action
         )
 
     return response
