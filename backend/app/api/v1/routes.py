@@ -35,11 +35,19 @@ from app.api.v1.schemas import (
 )
 from app.core.errors import AltoError, ToolError
 from app.core.logging import get_logger
-from app.domain.enums import Department, EntityType, IntentCategory, ReviewOutcome
+from app.domain.entities import IntentQueue
+from app.domain.enums import (
+    Department,
+    EntityType,
+    IntentCategory,
+    IntentStatus,
+    ReviewOutcome,
+)
 from app.graph.state import initial_state
 from app.services.execution.appointments import SlotUnavailableError
 from app.services.execution.finance_tools import EmiRequest, calculate_emi
 from app.services.execution.valuation_tools import ValuationRequest, estimate_trade_in
+from app.services.planning.planner import build_plan
 
 logger = get_logger(__name__)
 
@@ -139,9 +147,11 @@ async def submit_inquiry(payload: InquiryRequest, request: Request) -> InquiryRe
             if draft is not None and not result.get("escalated")
             else ""
         )
+        # No "Perfect —" here. It was congratulating the customer for
+        # something they had not done yet, and when it followed a question it
+        # read as a reply to an answer nobody had given.
         call_to_action = (
-            "Perfect — pick a 2-hour slot for your test drive "
-            "using the calendar below."
+            "Pick a 2-hour slot for your test drive using the calendar below."
         )
         response = response.model_copy(
             update={
@@ -167,6 +177,12 @@ async def submit_inquiry(payload: InquiryRequest, request: Request) -> InquiryRe
     return response
 
 
+# The only two things the graph can be waiting on that the calendar is
+# entitled to answer. Anything else means this turn belongs to a different
+# question.
+_CALENDAR_SLOTS = {EntityType.PREFERRED_DATE.value, EntityType.PREFERRED_TIME.value}
+
+
 def _should_show_calendar(result: dict[str, Any]) -> bool:
     """Whether the customer is ready to pick a slot.
 
@@ -174,6 +190,16 @@ def _should_show_calendar(result: dict[str, Any]) -> bool:
     vehicle to book it for — the only remaining information is the slot,
     which the calendar handles better than a text question.
     """
+    # Defer to what the graph decided this turn. With three open intents the
+    # test drive can be the highest-priority one while the graph is asking
+    # about the trade-in, and showing the picker then stapled "pick a slot
+    # below" onto "which Karva model is it?" — two unrelated instructions in
+    # one reply — and overwrote the slot the next turn needed to interpret.
+    # `None` is the ready-to-act case: nothing is outstanding at all.
+    awaiting = result.get("awaiting")
+    if awaiting is not None and awaiting not in _CALENDAR_SLOTS:
+        return False
+
     intents = result.get("intents")
     if intents is None:
         return False
@@ -589,12 +615,79 @@ async def book_slot(payload: dict[str, Any], request: Request) -> dict[str, Any]
         f"Please bring your Emirates ID and driving licence on the day. "
         f"See you at Legend Motors, Showroom #46, Ras Al Khor."
     )
+
+    # Booking one intent is not the end of the conversation. The customer may
+    # still be waiting on a trade-in valuation and a finance quote, and until
+    # this ran the confirmation was a dead end that left both unanswered.
+    follow_up, awaiting = await _advance_after_booking(container, conversation_id)
+    if follow_up:
+        confirmation = f"{confirmation}\n\n{follow_up}"
+
     await container.memory.append_turn(conversation_id, "assistant", confirmation)
 
     return {
+        "awaiting": awaiting,
         "booking": booking.to_dict(),
         "confirmation": confirmation,
     }
+
+
+async def _advance_after_booking(
+    container: Any, conversation_id: str
+) -> tuple[str | None, str | None]:
+    """Resolve the test drive and ask about whatever the customer is still owed.
+
+    The booking endpoint sits outside the graph — the customer tapped a
+    calendar, they did not send a message, so there is nothing for the
+    understanding layer to read. Rather than invent a synthetic turn and pay
+    for a full re-run, this advances the queue directly and reuses the same
+    clarification writer the graph uses, so the question is phrased the same
+    way it would have been on any other turn.
+
+    Returns the follow-up question and the slot it asks about, or
+    ``(None, None)`` when nothing is outstanding.
+    """
+    state = await container.memory.get(conversation_id)
+    if state is None:
+        return None, None
+
+    test_drive = state.intents.by_category(IntentCategory.TEST_DRIVE_BOOKING)
+    if test_drive is None or test_drive.is_resolved:
+        return None, None
+
+    resolved = IntentQueue(
+        intents=tuple(
+            intent.transition(IntentStatus.RESOLVED)
+            if intent.id == test_drive.id
+            else intent
+            for intent in state.intents
+        )
+    )
+
+    # `build_plan` reads `ordered()`, which skips resolved intents, so the
+    # new plan covers exactly what is left.
+    plan = build_plan(resolved)
+    state = state.model_copy(update={"intents": resolved, "plan": plan})
+    await container.memory.persist(state, [])
+
+    if not plan.all_missing_slots:
+        return None, None
+
+    try:
+        clarification = await container.clarifier.write(
+            plan=plan,
+            language=state.language,
+            conversation=state,
+            # Nothing was looked up on this request, so there are no verified
+            # figures to offer. The writer handles that case by asking plainly
+            # rather than inventing specifications.
+            tool_results={},
+        )
+    except Exception as exc:
+        logger.warning("post_booking_followup_failed", error=str(exc))
+        return None, None
+
+    return clarification.draft.en, clarification.awaiting
 
 
 @router.get("/admin/appointments", tags=["admin"])

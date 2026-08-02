@@ -699,3 +699,55 @@ default matches what is deployed. 8B stays documented as the
 higher-quota, ~100ms-faster fallback.
 
 231 tests pass, ruff clean, mypy strict clean.
+
+## 2026-08-02 — Multi-intent conversations stopped collapsing after one answer
+
+Reported symptom: a three-intent message produced two unrelated instructions
+in one reply, and booking a slot ended the conversation with the trade-in
+and financing requests unanswered.
+
+**The intent queue was never at fault.** The reply
+"…I'll come back to the test drive and other details afterwards" could only
+be written by something that knew all three intents. Both faults were in the
+API layer overriding the orchestrator.
+
+### 1. The calendar hijacked a question about something else
+`_should_show_calendar` inspected only `intents.primary` and never asked what
+the graph had decided that turn. With the test drive as highest-priority
+intent but the graph clarifying `old_vehicle_model`, routes.py appended its
+call-to-action to that question and overwrote `awaiting` with
+`test_drive_slot` — so the *next* turn's extractor was told the customer was
+answering about a slot when they were answering about their Karva.
+
+Fixed by deferring to the graph: the calendar shows only when `awaiting` is
+`preferred_date`, `preferred_time`, or `None` (nothing outstanding).
+
+### 2. "Perfect —" congratulated the customer for nothing
+A hardcoded prefix on the call-to-action. Following a question it read as a
+reply to an answer nobody had given. Removed.
+
+### 3. Booking was a dead end
+`book_slot` returned a hardcoded f-string, never touching the queue. Added
+`_advance_after_booking`: resolves the test-drive intent, rebuilds the plan
+over what remains (`ordered()` skips resolved intents, so this falls out for
+free), and reuses the same `ClarificationWriter` the graph uses so the
+follow-up is phrased identically to any other turn. Deliberately does *not*
+re-run the graph — the customer tapped a calendar, there is no message for
+the understanding layer to read, and inventing a synthetic turn would cost a
+full pipeline run for nothing.
+
+Verified live: booking now yields
+> "Booked! …See you at Legend Motors, Showroom #46, Ras Al Khor.
+> To assist you with the trade-in, which model is your current car?"
+
+with `open_intents` correctly reduced to `[trade_in_valuation, financing_emi]`.
+
+### Bonus: the suite was making live Groq calls
+`_build_clarifier` only checked for a key, not the provider, so
+`LLM_PROVIDER=mock` still attached the real Groq client — the test suite was
+reaching the network and spending quota on every clarifying turn, and the
+event loop closing mid-request produced confusing teardown errors. The mock
+provider now short-circuits the clarifier too, restoring the determinism
+guarantee its docstring promises.
+
+234 tests pass, ruff clean, mypy strict clean.

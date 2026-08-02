@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.core.logging import get_logger
-from app.core.settings import Settings, get_settings
+from app.core.settings import ProviderName, Settings, get_settings
 from app.domain.enums import ModelTier
 from app.infrastructure.llm.providers import ModelRouter, build_provider
 from app.infrastructure.llm.registry import BudgetGuard
@@ -176,6 +176,14 @@ def _build_clarifier(settings: Settings) -> ClarificationWriter:
     without it the platform still asks the right question, it just asks it in
     the words `intents.yaml` supplies.
     """
+    # The mock provider's contract is that identical input gives identical
+    # output, so a failing assertion means the pipeline changed rather than
+    # the weather. A live Groq call in the clarify path would break exactly
+    # that — and it did, until this check existed: the suite was reaching the
+    # network and spending quota on every clarifying turn.
+    if settings.llm_provider is ProviderName.MOCK:
+        return ClarificationWriter()
+
     if not settings.groq_api_key:
         return ClarificationWriter()
 

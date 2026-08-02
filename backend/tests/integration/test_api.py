@@ -400,3 +400,118 @@ class TestAdmin:
     async def test_unknown_trace_returns_404(self, client: AsyncClient) -> None:
         response = await client.get("/api/v1/conversations/conv_nonexistent/trace")
         assert response.status_code == 404
+
+
+class TestMultiIntentDoesNotCollapse:
+    """The three-intent scenario from the brief, followed through a booking.
+
+    Both bugs pinned here shipped together and produced the same symptom from
+    the customer's side: the platform answered one intent and behaved as if
+    the conversation were over.
+    """
+
+    MESSAGE = (
+        "I want to trade in my old Karva SUV and also check financing for a "
+        "new Renzo S5 — and can I test drive it Saturday?"
+    )
+
+    async def test_the_calendar_does_not_hijack_a_different_question(
+        self, client: AsyncClient
+    ) -> None:
+        # The graph may be asking about the trade-in while the test drive is
+        # still the highest-priority intent. Showing the picker then stapled
+        # "pick a slot below" onto "which Karva model is it?", and overwrote
+        # `awaiting` so the next turn misread the customer's answer.
+        body = (
+            await client.post(
+                "/api/v1/inquiries",
+                json={"message": self.MESSAGE, "channel": "whatsapp"},
+            )
+        ).json()
+
+        reply = body["reply"]["en"]
+        awaiting = body["awaiting"]
+
+        if awaiting != "test_drive_slot":
+            assert "calendar below" not in reply, (
+                "the calendar call-to-action was appended to a reply that was "
+                f"asking about {awaiting!r}"
+            )
+
+        # Whatever happened, the reply must not congratulate the customer for
+        # a choice they have not made.
+        assert not reply.startswith("Perfect")
+
+    async def test_booking_a_slot_asks_about_what_is_still_open(
+        self, client: AsyncClient
+    ) -> None:
+        # The bug: the confirmation was a hardcoded string that never touched
+        # the intent queue, so the trade-in and financing requests were
+        # silently abandoned the moment a slot was booked.
+        conversation_id = "conv_multi_intent_booking"
+        await client.post(
+            "/api/v1/inquiries",
+            json={
+                "message": self.MESSAGE,
+                "channel": "whatsapp",
+                "conversation_id": conversation_id,
+            },
+        )
+
+        slots = (await client.get("/api/v1/appointments/slots?days=7")).json()["slots"]
+        assert slots, "no bookable slots were offered"
+
+        booked = await client.post(
+            "/api/v1/appointments/book",
+            json={
+                "conversation_id": conversation_id,
+                "slot_id": slots[0]["slot_id"],
+                "vehicle": "Renzo S5",
+            },
+        )
+        assert booked.status_code == 200
+        confirmation = booked.json()["confirmation"]
+
+        assert "Booked!" in confirmation
+        assert "?" in confirmation, (
+            "the booking confirmation ended the conversation with the trade-in "
+            "and financing requests still unanswered:\n" + confirmation
+        )
+
+    async def test_the_test_drive_is_resolved_and_the_rest_are_not(
+        self, client: AsyncClient
+    ) -> None:
+        conversation_id = "conv_booking_resolves_one_intent"
+        await client.post(
+            "/api/v1/inquiries",
+            json={
+                "message": self.MESSAGE,
+                "channel": "whatsapp",
+                "conversation_id": conversation_id,
+            },
+        )
+        slots = (await client.get("/api/v1/appointments/slots?days=7")).json()["slots"]
+        await client.post(
+            "/api/v1/appointments/book",
+            json={
+                "conversation_id": conversation_id,
+                "slot_id": slots[0]["slot_id"],
+                "vehicle": "Renzo S5",
+            },
+        )
+
+        conversation = (
+            await client.get(f"/api/v1/conversations/{conversation_id}")
+        ).json()
+        # The endpoint exposes only what is still outstanding, which is
+        # exactly the question here: the booked intent should have left the
+        # queue and the other two should not have.
+        open_categories = {i["category"] for i in conversation["open_intents"]}
+
+        assert "test_drive_booking" not in open_categories, (
+            "the slot was booked but the test-drive intent is still open"
+        )
+        assert open_categories, (
+            "booking a slot emptied the whole queue — the trade-in and "
+            "financing requests were resolved without ever being answered"
+        )
