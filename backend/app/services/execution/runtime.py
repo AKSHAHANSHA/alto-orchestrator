@@ -388,8 +388,16 @@ You write replies for Alto Motors, a dealership in Velmora selling Karva \
 Rules you must not break:
 - Use only the figures given to you in the context. Never calculate, estimate \
 or adjust a number yourself. If a figure is not supplied, do not state one.
-- Address every open request that is still open. If the customer asked three \
-things and one is done, address the other two.
+- Before you finish a reply, check every line under "Open requests and what is \
+still missing". If the one you are acting on this turn is not the only one \
+listed, say what is still needed for each of the others too, even in one short \
+sentence. Confirming a booking or quote must never crowd out the rest.
+- Whenever a specific vehicle is named and its catalog record is in the \
+context, state its availability plus year, transmission, horsepower, drivetrain, \
+highway mpg and price as one dense line the first time it comes up and again \
+whenever you confirm a booking or quote for it — e.g. "2016 Renzo S5 — \
+Automatic, 333hp, all wheel drive, 26 hwy mpg, 67350 AED, in stock." If the \
+catalog says the vehicle is not stocked, say that plainly instead of guessing.
 - If the customer just answered a question you asked, acknowledge the answer \
 in one short phrase and move to the next step — either the next missing piece \
 of information, or the action itself if you have everything you need.
@@ -525,18 +533,67 @@ Preserve the disclaimer. Return only the Arabic text."""
 
 
 def _format_tool_result(payload: Any) -> str:
+    """Flatten a tool result into prompt text.
+
+    Recurses through nesting — catalog lookups return
+    ``{"new_vehicle": {"matches": [...]}}``, and a non-recursive formatter
+    silently drops everything past the first level, which is exactly how
+    vehicle specs used to vanish before ever reaching the model.
+    """
     if isinstance(payload, dict):
         if payload.get("declined"):
             return f"Declined: {payload.get('reason')}"
-        return "\n".join(
-            f"- {key}: {value}"
-            for key, value in payload.items()
-            if not isinstance(value, list | dict) and value is not None
-        )
+        lines: list[str] = []
+        for key, value in payload.items():
+            if value is None or value == () or value == []:
+                continue
+            if isinstance(value, dict):
+                nested = _format_tool_result(value)
+                if nested:
+                    lines.append(f"{key}:")
+                    lines.append(_indent(nested))
+            elif isinstance(value, list | tuple):
+                nested = _format_tool_result(list(value))
+                if nested:
+                    lines.append(f"{key}:")
+                    lines.append(_indent(nested))
+            else:
+                lines.append(f"- {key}: {value}")
+        return "\n".join(lines)
     if isinstance(payload, list):
-        return "\n".join(f"- {item.get('brand')} {item.get('model')} ({item.get('year')})"
-                         for item in payload[:5] if isinstance(item, dict))
+        lines = []
+        for item in payload[:5]:
+            if isinstance(item, dict) and "brand" in item and "model" in item:
+                lines.append(f"- {_describe_vehicle(item)}")
+            else:
+                lines.append(f"- {item}")
+        return "\n".join(lines)
     return str(payload)
+
+
+def _indent(text: str) -> str:
+    return "\n".join(f"  {line}" for line in text.splitlines())
+
+
+def _describe_vehicle(vehicle: dict[str, Any]) -> str:
+    """One compact line with the specs a customer actually asks about.
+
+    Not a table — the chat UI renders plain text only, so this is the
+    tabular-format request expressed as a dense single line instead.
+    """
+    heading = f"{vehicle.get('year', '')} {vehicle.get('brand', '')} {vehicle.get('model', '')}".strip()
+    specs: list[str] = []
+    if vehicle.get("transmission"):
+        specs.append(str(vehicle["transmission"]).replace("_", " ").title())
+    if vehicle.get("engine_hp"):
+        specs.append(f"{vehicle['engine_hp']:.0f}hp")
+    if vehicle.get("driven_wheels"):
+        specs.append(str(vehicle["driven_wheels"]))
+    if vehicle.get("highway_mpg"):
+        specs.append(f"{vehicle['highway_mpg']} hwy mpg")
+    if vehicle.get("msrp"):
+        specs.append(f"{vehicle['msrp']:.0f} AED")
+    return f"{heading} — {', '.join(specs)}" if specs else heading
 
 
 # ══════════════════════════════════════════════════════════════════════

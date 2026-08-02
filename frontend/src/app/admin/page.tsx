@@ -178,9 +178,9 @@ export default function AdminPage() {
               appointments.map((booking) => (
                 <article
                   key={booking.id}
-                  className="border-l-4 border-signal bg-signal/[0.07] px-5 py-4"
+                  className="border-l-4 border-positive bg-positive/[0.07] px-5 py-4"
                 >
-                  <p className="label text-signal">Test drive booked</p>
+                  <p className="label text-positive">Test drive booked</p>
                   <p className="mt-1 text-body font-medium">{booking.vehicle}</p>
                   <p className="mt-1 tabular font-mono text-caption text-ink-muted">
                     {booking.slot_label}
