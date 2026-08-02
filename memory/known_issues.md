@@ -149,3 +149,44 @@ resolved issue removed.
 - **Effect on tests**: 199 backend tests still pass because both
   retrieval and catalog-lookup degrade gracefully when their backends are
   down.
+
+## 2026-08-02 — Provider and quota gotchas
+
+### No automatic failover between LLM providers
+`LLM_PROVIDER` selects one provider at startup. An OpenAI outage does not
+fall through to Anthropic — it escalates conversations to humans. Treat
+Anthropic as a manual switch, not redundancy. Switching requires both
+`LLM_PROVIDER=anthropic` *and* `ANTHROPIC_API_KEY`; setting only the first
+makes the container **refuse to boot** (`Settings._validate` raises), which
+is deliberate fail-fast but means a half-done failover is a full outage.
+
+### New Gemini API keys get zero free-tier quota on gemini-2.0-flash
+`limit: 0` for `generate_content_free_tier_requests` — every call 429s
+immediately. Not transient. Use `gemini-2.5-flash`, which is verified
+working; this is now the default in `settings.py`. `gemini-2.5-flash-lite`
+returns 404 on this key. If clarifications suddenly go back to sounding
+templated, check the logs for `clarification_phrasing_failed` before
+suspecting the code — quota exhaustion looks identical to a bug from the
+outside, except the reply is still correct.
+
+### Vendor 400s cannot be caught by the mock or by any offline test
+Two models have now shipped that reject `temperature`: `gpt-5-mini` and
+the `claude-*-5` family. Both were found only by calling a live key. When
+changing a configured model ID, run a live smoke call before deploying —
+`tests/unit/test_providers.py` pins the *detection*, but only a real call
+proves the model ID itself resolves.
+
+### Reasoning models break constrained JSON on a latency budget
+Two models have now failed the clarification call the same way: Gemini 2.5
+Flash (thinking on by default, charged against the reply's output budget)
+and `openai/gpt-oss-20b` on Groq (`json_validate_failed` — "max completion
+tokens reached before generating a valid document", 3/6 runs). Before using
+any reasoning-capable model for short constrained JSON, disable thinking or
+raise `max_tokens` well past what the reply itself needs.
+
+### Cloud Run image must pre-cache FastEmbed weights
+If `retrieve` starts failing with "Could not load model ... from any
+source" and ~39s latency, the Dockerfile's model pre-cache layer has been
+dropped or `FASTEMBED_CACHE_PATH` no longer matches between build and
+runtime. Retrieval degrading to nothing is silent — the node catches the
+exception and the conversation continues without evidence.

@@ -26,6 +26,7 @@ from app.infrastructure.persistence.catalog_repository import CatalogLookupServi
 from app.infrastructure.vectorstore.retriever import HybridRetriever, NullRetriever
 from app.services.execution.appointments import AppointmentService
 from app.services.execution.catalog import VehicleCatalogService
+from app.services.execution.clarification import ClarificationWriter
 from app.services.execution.runtime import (
     Actuator,
     HumanReviewQueue,
@@ -77,6 +78,10 @@ class Container:
     human_queue: HumanReviewQueue
     memory: MemoryService
     appointments: AppointmentService = field(default_factory=AppointmentService)
+    # Defaults to template-only, so a container built without one — every test
+    # fixture, and any deployment with no Groq key — clarifies exactly as it
+    # did before, deterministically and at zero cost.
+    clarifier: ClarificationWriter = field(default_factory=ClarificationWriter)
     # Optional so test fixtures constructing a Container by keyword can omit
     # it — the vector-only path still works for everything except honest
     # "we don't stock that" replies.
@@ -89,6 +94,10 @@ class Container:
     @property
     def structured_catalog_enabled(self) -> bool:
         return self.catalog_lookup is not None
+
+    @property
+    def clarifier_uses_model(self) -> bool:
+        return self.clarifier.uses_model
 
 
 def _build_retriever(settings: Settings) -> Any:
@@ -160,6 +169,31 @@ def _build_catalog_lookup(settings: Settings) -> CatalogLookupService | None:
         return None
 
 
+def _build_clarifier(settings: Settings) -> ClarificationWriter:
+    """Attach Groq to clarification, or stay on the templates.
+
+    Optional in exactly the same way retrieval and the structured catalog are:
+    without it the platform still asks the right question, it just asks it in
+    the words `intents.yaml` supplies.
+    """
+    if not settings.groq_api_key:
+        return ClarificationWriter()
+
+    try:
+        from app.infrastructure.llm.groq_provider import GroqClarifier
+
+        return ClarificationWriter(
+            GroqClarifier(
+                api_key=settings.groq_api_key,
+                model=settings.groq_model,
+                timeout_seconds=settings.clarifier_timeout_seconds,
+            )
+        )
+    except Exception as exc:
+        logger.warning("clarifier_model_unavailable", error=str(exc))
+        return ClarificationWriter()
+
+
 def build_container(settings: Settings | None = None) -> Container:
     settings = settings or get_settings()
 
@@ -182,6 +216,7 @@ def build_container(settings: Settings | None = None) -> Container:
         actuator=Actuator(),
         human_queue=HumanReviewQueue(),
         memory=MemoryService(),
+        clarifier=_build_clarifier(settings),
     )
 
     logger.info(
@@ -190,6 +225,9 @@ def build_container(settings: Settings | None = None) -> Container:
         catalog_size=catalog.size,
         retrieval_enabled=container.retrieval_enabled,
         structured_catalog=container.structured_catalog_enabled,
+        clarifier_model=(
+            settings.groq_model if container.clarifier_uses_model else "template"
+        ),
         auto_send=settings.allow_auto_send,
     )
     return container

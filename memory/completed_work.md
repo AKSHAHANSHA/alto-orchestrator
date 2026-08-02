@@ -447,3 +447,216 @@ enough to run three times in parallel every turn."
 - **Time pills** below for the selected day only: mono time labels, wrap-flow. Selected pill uses Karva amber (`bg-karva text-paper`) with a small checkmark badge in ink. Unavailable pills are muted with `line-through decoration-1`. Hover lift matches the day strip.
 - **Confirm bar** at the bottom: fills with `karva-soft` when a slot is selected — subtle "you're one click away" affordance.
 - No modals. The selection is inline and reversible; a single Confirm button completes the booking.
+
+## 2026-08-02 — Clarifying questions can finally see the catalog
+
+### The bug underneath the feature
+`route_after_plan` branched to `clarify` straight off `build_plan`,
+*before* `retrieve` and `call_tools`. So `tool_results` and `chunks` were
+both empty in every clarify turn. The node was not choosing to omit
+vehicle specs — it had never been given any. Any attempt to enrich the
+clarifying question would have been specs-empty 100% of the time,
+including the "narrow patch" option discussed earlier.
+
+**Fix**: `build_plan → retrieve → call_tools → {clarify | score_confidence}`.
+The branch is now `route_after_tools`. Retrieval and tools are
+deterministic and cost nothing, so running them before the branch buys
+context for free. Pinned by
+`test_a_clarifying_turn_has_already_looked_the_vehicle_up`.
+
+### Gemini phrases clarifications; the template is still the floor
+- `infrastructure/llm/gemini_provider.py` — `GeminiClarifier`. Not a full
+  `LLMProvider` on purpose: no structured output, no budget router, one
+  `phrase()` method, `asyncio.wait_for` timeout. SDK imported lazily.
+- `services/execution/clarification.py` — `ClarificationWriter`. Computes
+  the policy template first, every time. Only then attempts a rewrite.
+- **Which slot is asked about is never the model's decision** — it comes
+  from `intent_policy().next_question_slot()` as before. The model only
+  chooses words.
+- **Figure discipline**: the permitted number set is exactly what we
+  pre-rendered into the prompt (spec line + availability + template). Any
+  digit in the reply outside that set rejects the whole rewrite. Also
+  rejected: unparseable JSON, empty, >500 chars, no question mark.
+- Rejection and failure both fall back to the template, and the reason
+  lands on the `clarify` span as `fallback_reason` + `source`.
+- `validate_grounding` was deliberately *not* reused here: its
+  qualitative branch scores lexical overlap against retrieved chunks, and
+  a question overlaps nothing, so every clarification would score
+  UNGROUNDED. The numeric check is the part that transfers.
+
+### Wiring
+- `GEMINI_API_KEY` / `GEMINI_MODEL` / `CLARIFIER_TIMEOUT_SECONDS` in
+  settings and `.env.example`. Empty key is a supported configuration.
+- `Container.clarifier` defaults to `ClarificationWriter()` (template
+  only), so every existing test fixture and any keyless deployment
+  behaves exactly as before.
+- `_describe_vehicle` → `describe_vehicle` in `runtime.py` so the
+  clarifier can render the same one-line spec format the generator uses.
+
+### Tests and gates
+- 214 backend tests pass against the mock (199 + 15 new). ruff clean,
+  mypy strict clean.
+- Not verified against a live Gemini key — no key available in this
+  session. The template path and every rejection branch are covered by
+  `tests/unit/test_clarification.py` with a stub phraser.
+
+## 2026-08-02 — Anthropic verified live; premium tier was broken
+
+### There is no provider failover, and never was
+Worth stating plainly because it is a natural assumption: `build_provider`
+is a `match` on `LLM_PROVIDER` resolved once at startup, and `ModelRouter`
+wraps exactly one provider. If OpenAI returns errors, nothing switches to
+Anthropic — `discover_intents` logs and returns empty, confidence drops,
+and the conversation escalates to a human. Anthropic is an *alternative*
+selected by config, not a *fallback*. Switching is a deliberate two-
+variable change (`LLM_PROVIDER` + the key).
+
+### `claude-opus-5` rejected every request — now fixed
+First live Anthropic call on the premium tier returned
+`400 — "temperature is deprecated for this model"`. Exactly the failure
+class already handled for `gpt-5-mini` via `_accepts_custom_temperature`,
+but the Anthropic adapter had no equivalent guard and passed `temperature`
+unconditionally in all three methods (`complete`, `complete_structured`,
+`stream`).
+
+**Fix**: `_anthropic_accepts_temperature`, regex
+`^claude-[a-z]+-5(?:$|[^0-9])`. Anchored on the generation digit so
+`claude-haiku-4-5-20251001` — Haiku 4.5, which *does* accept the parameter
+— is not caught. A naive `"-5" in model` substring check would have
+silently stripped temperature from the entire fast tier.
+
+**Root cause of it reaching main**: no unit coverage existed for the
+gpt-5 detection either, and the mock provider structurally cannot catch a
+vendor 400. Added `tests/unit/test_providers.py` covering both families.
+
+### Verified live (real keys, real spend ~$0.01 total)
+- `complete` fast (`claude-haiku-4-5-20251001`) — OK
+- `complete_structured` fast — OK, both intents discovered correctly
+- `complete` premium (`claude-opus-5`) — was FAIL, now OK
+- Full graph turn end to end on Anthropic, ten nodes, zero node errors
+
+### GEMINI_MODEL default changed to gemini-2.5-flash
+The first live clarification call 429'd with
+`limit: 0, model: gemini-2.0-flash` — the newly issued key has a
+free-tier allocation of literally zero requests for 2.0-flash. Probed the
+alternatives: `gemini-2.5-flash` works, `gemini-2.0-flash-001` 429s,
+`gemini-2.5-flash-lite` 404s. Default moved to `gemini-2.5-flash`.
+
+That 429 was also an unplanned live test of the fallback path, and it
+behaved correctly — `clarification_phrasing_failed` logged, template
+returned, conversation unaffected.
+
+With both working, the clarify node produced:
+> "We have the 2017 Renzo S5, a manual, 333hp, all-wheel drive model with
+> 26 hwy mpg, available for 53100 AED. Which day would suit you for the
+> test drive?"
+
+which is the behaviour this whole thread was chasing.
+
+### Tests and gates
+- 228 backend tests pass against the mock. ruff clean, mypy strict clean.
+
+## 2026-08-02 — Verified on Cloud Run via a no-traffic tagged revision
+
+Method: `gcloud run deploy --no-traffic --tag=anthropic-test` with
+`LLM_PROVIDER=anthropic`, giving revision 00005/00006 a private URL while
+production stayed pinned at 100% on 00004-mhq. Tag removed and traffic
+re-pinned afterwards; production never served a test request.
+
+### Anthropic works on Cloud Run
+`discover_intents` and `extract_entities` both ran on
+`claude-haiku-4-5-20251001` / provider `anthropic`, status ok, both intents
+found. The SDK is already in the image via `pyproject.toml`, and Cloud Run
+egress to `api.anthropic.com` is unrestricted.
+
+### Two Cloud-Run-only failures the local run could not have caught
+
+**1. Retrieval was dead in the deployed image.** `retrieve` failed with
+"Could not load model ... from any source" after 39 seconds, every
+request. The Dockerfile never actually baked the FastEmbed weights despite
+CLAUDE.md claiming it did — they were being downloaded at runtime, and
+that download fails on Cloud Run.
+
+Pre-existing, but harmless until now: `clarify` used to bypass `retrieve`
+entirely, so the 2026-08-02 graph reorder is what put those 39 seconds on
+the most common path in the app. Fixed by pre-caching all three models in
+the Dockerfile with `FASTEMBED_CACHE_PATH=/opt/fastembed` (verified
+fastembed reads that variable in `common/utils.py`).
+
+Result: `retrieve` now returns 5 reranked chunks. End-to-end latency
+45.9s → 22.0s cold, 6.4s warm.
+
+**2. `gemini-2.5-flash` returned unparseable JSON, every call.** Thinking
+is on by default for the 2.5 family and is charged against the *same*
+output budget as the reply, so it consumed the budget before closing the
+JSON brace. Fixed with `thinking_config=ThinkingConfig(thinking_budget=0)`
+and `max_output_tokens` 400 → 800. Verified 4/4 clean parses.
+
+With both fixed, the deployed clarify node produced:
+> "We can certainly arrange a test drive for the 2016 Renzo S5 with 333hp
+> and all-wheel drive. Which day would suit you for the test drive? I'll
+> also get back to you regarding the monthly installment."
+
+Specs, the clarifying question, *and* an acknowledgement of the second
+open intent — all three, which is what the whole thread was after.
+
+### Timeout labelling
+A later warm request showed `clarify` at exactly 6001ms falling back with
+`phrasing_failed: ` — nothing after the colon, because
+`str(TimeoutError())` is empty. Timeout is now caught separately and
+reports `timed_out`. Free-tier Gemini latency is genuinely variable
+(762ms on one call, >6s on another), so this is the failure an operator
+will see most often.
+
+### backend-env.yaml
+`ANTHROPIC_API_KEY`, `ANTHROPIC_FAST_MODEL` and `ANTHROPIC_PREMIUM_MODEL`
+added, with `LLM_PROVIDER` left on `openai`. Switching providers is now a
+one-line edit rather than a two-variable change where getting only the
+first half right refuses to boot.
+
+## 2026-08-02 — Clarification moved from Gemini to Groq
+
+Gemini lasted less than a day. It worked, but its free tier was erratic on
+Cloud Run — 762ms on one call, a >6s timeout on the next, same prompt —
+so the feature spent much of its time silently falling back to templates.
+
+### Groq needs no SDK
+Groq serves an OpenAI-compatible API, so `GroqClarifier` points the
+`openai` client the project already depends on at
+`https://api.groq.com/openai/v1`. Consequences:
+- `google-genai` dependency **removed** and uninstalled.
+- No `ThinkingConfig`, no vendor types — the fragile part of the Gemini
+  adapter is simply gone.
+- `response_format={"type": "json_object"}` replaces
+  `response_mime_type`, so the caller's strict parser is unchanged.
+
+`CLARIFIER_TIMEOUT_SECONDS` dropped 6.0 → 4.0. The 6s ceiling existed only
+because Gemini regularly needed it.
+
+### Model chosen from measurement, not opinion
+Six runs each against the real clarification prompt:
+
+| model | accepted | p50 | note |
+|---|---|---|---|
+| `llama-3.1-8b-instant` | 6/6 | 208ms | plainest wording |
+| `llama-3.3-70b-versatile` | 6/6 | 286ms | also acknowledges the 2nd intent |
+| `openai/gpt-oss-20b` | 3/6 | 747ms | `json_validate_failed` |
+
+`gpt-oss-20b` failed for the *same reason Gemini did*: reasoning tokens
+consumed the completion budget before the closing brace
+("max completion tokens reached before generating a valid document").
+Worth remembering as a pattern — any reasoning-enabled model needs its
+thinking disabled or its budget raised before it can be used for
+constrained JSON on a latency budget.
+
+**Shipped `llama-3.1-8b-instant`.** 70B is a one-env-var swap
+(`GROQ_MODEL`) and writes better multi-intent replies, at the cost of a
+smaller free daily token budget.
+
+### Verified on the deploy configuration
+Full graph turn with `LLM_PROVIDER=openai` + Groq clarifier: ten nodes,
+zero errors, `clarify` **128ms**, `source=model`, no fallback. Against
+Gemini's 6001ms timeout on the same node, roughly a 47x improvement.
+
+241 tests pass, ruff clean, mypy strict clean, and mypy still passes with
+`google-genai` uninstalled — proving nothing imports it.

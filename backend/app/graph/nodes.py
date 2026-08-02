@@ -24,8 +24,7 @@ from app.domain.enums import (
     RoutingTier,
     SpanStatus,
 )
-from app.domain.policies import intent_policy
-from app.domain.value_objects import DraftReply, TokenUsage
+from app.domain.value_objects import TokenUsage
 from app.graph.state import GraphState
 from app.services.decision import confidence as confidence_engine
 from app.services.decision.router import route
@@ -336,34 +335,29 @@ def build_nodes(deps: Any) -> dict[str, NodeFn]:
 
         The system is not confused here — it knows precisely which slot is
         empty. So it asks that question, not "could you rephrase?".
+
+        Which slot gets asked about is decided by policy, never by a model.
+        The model, when one is configured, only chooses the words — and the
+        writer falls back to the template whenever it cannot vouch for them.
         """
         started = time.perf_counter()
-        plan_obj = state.get("plan")
-        policy = intent_policy()
-
-        missing = set(plan_obj.all_missing_slots) if plan_obj else set()
-        slot = policy.next_question_slot(missing)
-        question = policy.question_for(slot) if slot else None
-
-        if question is None:
-            en = "Could you tell me a little more about what you are looking for?"
-            ar = "هل يمكنك إخباري بالمزيد عما تبحث عنه؟"
-        else:
-            en, ar = question.en, question.ar
-
-        profile = state.get("language")
-        bilingual = bool(profile and profile.requires_bilingual_reply)
+        result = await deps.clarifier.write(
+            plan=state.get("plan"),
+            language=state.get("language"),
+            conversation=_rebuild_conversation(state),
+            tool_results=state.get("tool_results", {}),
+        )
 
         return {
-            "draft": DraftReply(
-                en=en,
-                ar=ar if bilingual else None,
-                requires_human_approval=False,
-            ),
-            "awaiting": slot.value if slot else "clarification",
+            "draft": result.draft,
+            "awaiting": result.awaiting,
             "spans": [
                 _span(state, "clarify", CognitiveLayer.EXECUTION, started,
-                      asked_for=slot.value if slot else None, bilingual=bilingual)
+                      usage=result.usage, model=result.model,
+                      provider=result.provider,
+                      asked_for=result.awaiting, source=result.source,
+                      bilingual=result.draft.is_bilingual,
+                      fallback_reason=result.fallback_reason)
             ],
         }
 

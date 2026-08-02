@@ -75,6 +75,21 @@ class Settings(BaseSettings):
     anthropic_fast_model: str = "claude-haiku-4-5-20251001"
     anthropic_premium_model: str = "claude-opus-5"
 
+    # Clarifying questions are phrased by a separate small model rather than
+    # the configured provider: they fire constantly, they are one sentence
+    # long, and they have a correct deterministic fallback. Leaving the key
+    # empty is a supported configuration — clarification reverts to the
+    # templates in `intents.yaml`. Groq is used rather than the main provider
+    # because it is free at this volume and fast enough to sit on the
+    # critical path.
+    groq_api_key: str = ""
+    groq_model: str = "llama-3.1-8b-instant"
+    # Groq answers this prompt in well under a second, so a short ceiling
+    # costs nothing when the model is healthy and saves the customer a long
+    # stall when it is not. The previous 6s default was tuned for Gemini,
+    # whose free tier regularly took longer than that.
+    clarifier_timeout_seconds: float = Field(default=4.0, gt=0)
+
     llm_daily_budget_usd: float = 5.00
 
     # ── Retrieval ─────────────────────────────────────────────────────

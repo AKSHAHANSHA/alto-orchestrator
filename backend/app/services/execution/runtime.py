@@ -564,7 +564,7 @@ def _format_tool_result(payload: Any) -> str:
         lines = []
         for item in payload[:5]:
             if isinstance(item, dict) and "brand" in item and "model" in item:
-                lines.append(f"- {_describe_vehicle(item)}")
+                lines.append(f"- {describe_vehicle(item)}")
             else:
                 lines.append(f"- {item}")
         return "\n".join(lines)
@@ -575,13 +575,15 @@ def _indent(text: str) -> str:
     return "\n".join(f"  {line}" for line in text.splitlines())
 
 
-def _describe_vehicle(vehicle: dict[str, Any]) -> str:
+def describe_vehicle(vehicle: dict[str, Any]) -> str:
     """One compact line with the specs a customer actually asks about.
 
     Not a table — the chat UI renders plain text only, so this is the
     tabular-format request expressed as a dense single line instead.
     """
-    heading = f"{vehicle.get('year', '')} {vehicle.get('brand', '')} {vehicle.get('model', '')}".strip()
+    heading = " ".join(
+        str(vehicle.get(key, "")) for key in ("year", "brand", "model")
+    ).strip()
     specs: list[str] = []
     if vehicle.get("transmission"):
         specs.append(str(vehicle["transmission"]).replace("_", " ").title())

@@ -272,3 +272,45 @@ increase (~4-6x gpt-4o-mini's list price for the same task shape).
 The pricing entry added for gpt-5-mini in `registry.py` is an estimate,
 not verified against OpenAI's current published rate — flagged in a
 comment there and in `future_tasks.md`.
+
+## 2026-08-02
+
+### D-0xx — A second vendor, scoped to clarification only
+
+**Problem**: Clarifying questions were pure template lookup. Correct and
+free, but tone-deaf: the graph knew the customer's vehicle was in stock
+at a known price and still replied "Which day would suit you?".
+
+**Options**:
+1. Narrow patch — splice a deterministic spec line into the test-drive
+   clarification only. No LLM. Fixes one spot; every other clarifying
+   question (down payment, trade-in mileage) stays bare.
+2. Route booking-ready turns to `generate` instead of `clarify`. Fixes it
+   everywhere, but puts a paid API call on the single most frequent path
+   in the app — clarify fires constantly.
+3. Keep `clarify` as its own node, phrase it with a separate free-tier
+   model, template as fallback.
+
+**Chosen**: Option 3, plus the graph reorder that Options 1 and 2 both
+silently depended on.
+
+**Reasoning**: Clarification has a property nothing else in the pipeline
+has — a *correct deterministic answer already in hand*. That makes it the
+one place where a free, lower-tier, second-vendor model is defensible:
+the downside of a bad or slow response is not a bad reply, it is the
+reply we would have sent anyway. Option 2 would have made every "which
+model?" cost an OpenAI call and a round trip.
+
+**Why Gemini is not registered as an `LLMProvider`**: it would then be
+selectable for understanding and generation, where the argument above
+does not hold — those paths have no deterministic fallback and do need
+schema-enforced structured output. `GeminiClarifier` exposes one method
+so it cannot be misused.
+
+**Rejected as too clever**: asking Gemini to also answer the other open
+intents in the same turn. That is generation, it has no fallback, and it
+would put an unreviewed second vendor in front of quoted figures.
+
+**Constraint that shaped the implementation**: the model may only restate
+figures we pre-rendered into its prompt. Enforced by set-difference on
+digit runs, not by prompt instruction alone.

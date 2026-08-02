@@ -43,6 +43,12 @@ PRICING: dict[str, ModelPricing] = {
     "gpt-4o": ModelPricing(2.50, 10.00),
     "claude-haiku-4-5-20251001": ModelPricing(1.00, 5.00),
     "claude-opus-5": ModelPricing(5.00, 25.00),
+    # Priced at zero because clarification runs on a free Groq key. If that
+    # key is ever moved to a paid tier, put the real rates here — otherwise
+    # the budget guard will not see the spend.
+    "llama-3.1-8b-instant": ModelPricing(0.0, 0.0),
+    "llama-3.3-70b-versatile": ModelPricing(0.0, 0.0),
+    "openai/gpt-oss-20b": ModelPricing(0.0, 0.0),
     "mock-fast": ModelPricing(0.0, 0.0),
     "mock-premium": ModelPricing(0.0, 0.0),
 }

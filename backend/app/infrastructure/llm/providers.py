@@ -10,6 +10,7 @@ string into the pipeline.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -43,6 +44,18 @@ def _accepts_custom_temperature(model: str) -> bool:
     prefix-based so future gpt-5-x variants are covered without a code edit.
     """
     return not model.startswith("gpt-5")
+
+
+# The Claude 5 family (claude-opus-5, claude-sonnet-5, claude-fable-5) rejects
+# `temperature` outright — "`temperature` is deprecated for this model", 400.
+# Anchored on the generation digit rather than a plain substring so that
+# `claude-haiku-4-5-20251001`, which is Haiku 4.5 and *does* accept the
+# parameter, is not caught by it.
+_CLAUDE_WITHOUT_TEMPERATURE = re.compile(r"^claude-[a-z]+-5(?:$|[^0-9])")
+
+
+def _anthropic_accepts_temperature(model: str) -> bool:
+    return _CLAUDE_WITHOUT_TEMPERATURE.match(model) is None
 
 
 class OpenAIProvider:
@@ -197,14 +210,17 @@ class AnthropicProvider:
         max_tokens: int | None = None,
     ) -> LLMResponse:
         model = self.model_for(tier)
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+            "max_tokens": max_tokens or 2048,
+        }
+        if _anthropic_accepts_temperature(model):
+            kwargs["temperature"] = temperature
+
         try:
-            message = await self._client.messages.create(
-                model=model,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-                temperature=temperature,
-                max_tokens=max_tokens or 2048,
-            )
+            message = await self._client.messages.create(**kwargs)
         except Exception as exc:
             raise LLMError(f"Anthropic completion failed: {exc}", model=model) from exc
 
@@ -227,24 +243,26 @@ class AnthropicProvider:
     ) -> StructuredResponse[SchemaT]:
         model = self.model_for(tier)
         tool_name = "emit_" + schema.__name__.lower()
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+            "max_tokens": 4096,
+            "tools": [
+                {
+                    "name": tool_name,
+                    "description": f"Emit a well-formed {schema.__name__}.",
+                    "input_schema": schema.model_json_schema(),
+                }
+            ],
+            # Forcing the tool removes the possibility of a prose reply.
+            "tool_choice": {"type": "tool", "name": tool_name},
+        }
+        if _anthropic_accepts_temperature(model):
+            kwargs["temperature"] = temperature
 
         try:
-            message = await self._client.messages.create(
-                model=model,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-                temperature=temperature,
-                max_tokens=4096,
-                tools=[
-                    {
-                        "name": tool_name,
-                        "description": f"Emit a well-formed {schema.__name__}.",
-                        "input_schema": schema.model_json_schema(),
-                    }
-                ],
-                # Forcing the tool removes the possibility of a prose reply.
-                tool_choice={"type": "tool", "name": tool_name},
-            )
+            message = await self._client.messages.create(**kwargs)
         except Exception as exc:
             raise StructuredOutputError(
                 f"Anthropic structured output failed: {exc}",
@@ -277,13 +295,17 @@ class AnthropicProvider:
     async def stream(
         self, *, system: str, user: str, tier: ModelTier, temperature: float = 0.0
     ) -> AsyncIterator[str]:
-        async with self._client.messages.stream(
-            model=self.model_for(tier),
-            system=system,
-            messages=[{"role": "user", "content": user}],
-            temperature=temperature,
-            max_tokens=2048,
-        ) as stream:
+        model = self.model_for(tier)
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+            "max_tokens": 2048,
+        }
+        if _anthropic_accepts_temperature(model):
+            kwargs["temperature"] = temperature
+
+        async with self._client.messages.stream(**kwargs) as stream:
             async for text in stream.text_stream:
                 yield text
 

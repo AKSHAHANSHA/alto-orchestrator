@@ -34,7 +34,7 @@ logger = get_logger(__name__)
 MAX_GROUNDING_RETRIES = 1
 
 
-def route_after_plan(state: GraphState) -> Literal["clarify", "retrieve"]:
+def route_after_tools(state: GraphState) -> Literal["clarify", "score_confidence"]:
     """Gather missing facts before doing work that depends on them.
 
     An incomplete step executed now produces a confidently wrong answer; one
@@ -46,14 +46,19 @@ def route_after_plan(state: GraphState) -> Literal["clarify", "retrieve"]:
     get me a manager" contains a service intent with an unfilled vehicle slot,
     and asking that customer which vehicle they mean before escalating would
     turn one complaint into two. Escalation outranks information gathering.
+
+    This branches *after* retrieval and tools rather than straight off the
+    plan. Both are deterministic and cost nothing, and running them first is
+    what lets the question carry what we already know — "the S5 is in stock at
+    67350 AED, which day suits you?" instead of a bare "which day?".
     """
     if _needs_a_person_now(state):
-        return "retrieve"
+        return "score_confidence"
 
     plan = state.get("plan")
     if plan and plan.next_action and plan.next_action.startswith("ask_"):
         return "clarify"
-    return "retrieve"
+    return "score_confidence"
 
 
 def _needs_a_person_now(state: GraphState) -> bool:
@@ -126,17 +131,17 @@ def build_graph(deps: Any) -> StateGraph:
     graph.add_edge("extract_entities", "build_plan")
     graph.add_edge("score_sentiment", "build_plan")
 
-    graph.add_conditional_edges(
-        "build_plan",
-        route_after_plan,
-        {"clarify": "clarify", "retrieve": "retrieve"},
-    )
+    graph.add_edge("build_plan", "retrieve")
 
     # ── Layer 4a: gather evidence before deciding ─────────────────────
     # Retrieval and tools run in parallel; both inform the confidence score,
     # so neither can wait until after the decision.
     graph.add_edge("retrieve", "call_tools")
-    graph.add_edge("call_tools", "score_confidence")
+    graph.add_conditional_edges(
+        "call_tools",
+        route_after_tools,
+        {"clarify": "clarify", "score_confidence": "score_confidence"},
+    )
 
     # ── Layer 3: decision ─────────────────────────────────────────────
     graph.add_edge("score_confidence", "decide")

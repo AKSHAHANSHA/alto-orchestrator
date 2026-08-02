@@ -37,6 +37,9 @@ dependencies = [
     # ── LLM providers ─────────────────────────────────────────────────
     "openai>=1.57,<3",
     "anthropic>=0.40,<1",
+    # Groq needs no SDK of its own: it serves an OpenAI-compatible API, so the
+    # clarification adapter points the `openai` client above at a different
+    # base URL. See infrastructure/llm/groq_provider.py.
 
     # ── Language ──────────────────────────────────────────────────────
     "langdetect>=1.0.9,<2",

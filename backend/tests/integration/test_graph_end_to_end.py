@@ -296,3 +296,21 @@ class TestMultiTurnResume:
             "answering a clarification with a vehicle brand should satisfy the slot; "
             "the planner treated it as an unfilled reference and asked again"
         )
+
+    async def test_a_clarifying_turn_has_already_looked_the_vehicle_up(
+        self, container: Container
+    ) -> None:
+        # The graph used to branch to `clarify` straight off the plan, before
+        # retrieval or tools had run — so the node asking "which day?" had an
+        # empty `tool_results` and could not have mentioned the car even if it
+        # wanted to. Tools now run first, on every path.
+        result = await run(
+            container, "Can I test drive the Renzo S5?", "conv_clarify_has_specs"
+        )
+
+        assert result["awaiting"] == "preferred_date"
+        assert result["tool_results"], (
+            "clarify ran before the tools; a clarifying question can never "
+            "carry vehicle specifics while that is true"
+        )
+        assert "catalog_similar" in result["tool_results"]
