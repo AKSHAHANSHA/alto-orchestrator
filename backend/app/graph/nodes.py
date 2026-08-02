@@ -377,6 +377,7 @@ def build_nodes(deps: Any) -> dict[str, NodeFn]:
             chunks=state.get("chunks", ()),
             tool_results=state.get("tool_results", {}),
             tier=decision.model_tier if decision else None,
+            allow_auto_send=deps.settings.allow_auto_send,
         )
 
         return {

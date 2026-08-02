@@ -418,6 +418,7 @@ Preserve the disclaimer. Return only the Arabic text."""
         chunks: tuple[RetrievedChunk, ...],
         tool_results: dict[str, Any],
         tier: ModelTier | None,
+        allow_auto_send: bool = False,
     ) -> tuple[DraftReply, TokenUsage, str]:
         context = self._build_context(conversation, chunks, tool_results)
         model_tier = tier or ModelTier.FAST
@@ -442,7 +443,11 @@ Preserve the disclaimer. Return only the Arabic text."""
             DraftReply(
                 en=response.text.strip(),
                 ar=arabic.strip() if arabic else None,
-                requires_human_approval=True,
+                # Reached only for AUTO/PREMIUM tiers — HUMAN tier never
+                # generates a draft, it escalates straight to a person. So
+                # this flag is exactly the master kill-switch: whether those
+                # two tiers may reach the customer without operator sign-off.
+                requires_human_approval=not allow_auto_send,
             ),
             usage,
             response.model,
