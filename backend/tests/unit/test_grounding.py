@@ -85,3 +85,50 @@ class TestVacuouslyGrounded:
         # The helper callers use when they know up front there is nothing to
         # check must not be a different, weaker verdict than the real thing.
         assert vacuously_grounded() == validate_grounding("Hi!", (), {})
+
+
+class TestFigureNormalisation:
+    """A tool-sourced figure must not be condemned by how it was spelled.
+
+    Production: an EMI quote echoing exactly what the finance tool returned —
+    10620.0, 42480.0, 801.0, 48060.0 — had every one of those flagged
+    unsupported, because the tool numbers were canonicalised to "10620" while
+    the draft said "10620.0". The reply was correct and the check was wrong.
+    """
+
+    def test_a_trailing_point_zero_still_matches_the_tool(self) -> None:
+        report = validate_grounding(
+            "Your monthly instalment is 801.0 AED over 60 months.",
+            (),
+            {"emi": {"monthly_instalment": 801.0, "tenure_months": 60}},
+        )
+        assert report.passes, [c.text for c in report.unsupported_claims]
+
+    def test_the_reverse_spelling_also_matches(self) -> None:
+        # Tool returns a whole number, draft writes a decimal.
+        report = validate_grounding(
+            "The down payment is 10620 AED.", (), {"emi": {"down_payment": 10620.0}}
+        )
+        assert report.passes
+
+    def test_thousands_separators_still_match(self) -> None:
+        report = validate_grounding(
+            "The total payable is 48,060 AED.", (), {"emi": {"total_payable": 48060.0}}
+        )
+        assert report.passes
+
+    def test_a_genuinely_different_number_still_fails(self) -> None:
+        # Normalising spellings must not start accepting wrong values.
+        report = validate_grounding(
+            "Your monthly instalment is 810 AED.",
+            (),
+            {"emi": {"monthly_instalment": 801.0}},
+        )
+        assert not report.passes
+        assert report.has_unsupported_numeric_claim
+
+    def test_a_genuine_decimal_is_not_flattened(self) -> None:
+        report = validate_grounding(
+            "The annual rate is 4.99%.", (), {"emi": {"annual_rate": 4.99}}
+        )
+        assert report.passes

@@ -51,10 +51,25 @@ def _is_question(sentence: str) -> bool:
     return sentence.rstrip().endswith(("?", "؟"))
 
 
+def _canonical(raw: str) -> str:
+    """One spelling per value, so equal numbers compare equal.
+
+    The comparison is textual, which meant `10620.0` in a draft did not match
+    `10620` from a tool and a correct, tool-sourced instalment was condemned
+    as invented. Seen in production: five figures from the EMI and trade-in
+    tools all flagged unsupported in one reply, escalating a conversation
+    scoring 92 for quoting exactly what it was given.
+    """
+    value = raw.replace(",", "")
+    if "." in value:
+        value = value.rstrip("0").rstrip(".")
+    return value or "0"
+
+
 def _numbers_in(text: str) -> set[str]:
-    """Bare digit sequences, normalised so 150,000 and 150000 compare equal."""
+    """Bare digit sequences, normalised so 150,000, 150000 and 150000.0 agree."""
     return {
-        match.group(0).replace(",", "").rstrip(".")
+        _canonical(match.group(0))
         for match in re.finditer(r"\d[\d,]*(?:\.\d+)?", text)
     }
 
@@ -75,8 +90,8 @@ def _tool_numbers(tool_results: dict[str, Any]) -> set[str]:
             for item in value:
                 walk(item)
         elif isinstance(value, int | float) and not isinstance(value, bool):
-            numbers.add(str(int(value)) if float(value).is_integer() else str(value))
-            numbers.add(f"{value:.2f}".rstrip("0").rstrip("."))
+            numbers.add(_canonical(str(value)))
+            numbers.add(_canonical(f"{value:.2f}"))
         elif isinstance(value, str):
             numbers.update(_numbers_in(value))
 

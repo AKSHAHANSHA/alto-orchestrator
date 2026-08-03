@@ -27,7 +27,13 @@ from app.domain.enums import (
     IntentCategory,
     ModelTier,
 )
-from app.domain.value_objects import DraftReply, RetrievedChunk, RoutingDecision, TokenUsage
+from app.domain.value_objects import (
+    DraftReply,
+    GroundingReport,
+    RetrievedChunk,
+    RoutingDecision,
+    TokenUsage,
+)
 from app.services.decision.router import escalation_reason
 from app.services.execution.catalog import VehicleCatalogService
 from app.services.execution.finance_tools import EmiRequest, calculate_emi
@@ -423,9 +429,17 @@ in one short phrase and move to the next step — either the next missing piece 
 of information, or the action itself if you have everything you need.
 - The context below is your briefing, not a template. Never repeat its \
 headings, its bullet lists or its labels back to the customer — no "Open \
-requests and what is still missing", no "still need:", no category names. \
-Write the reply as one person writing to another; the customer must not be \
-able to tell what the briefing looked like.
+requests and what is still missing", no "still need:", no category names, \
+and never a raw field name like "retained_ratio", "rate_band" or "monthly \
+rate". Write the reply as one person writing to another; the customer must \
+not be able to tell what the briefing looked like.
+- Quote the few figures that answer the question, not every figure you were \
+given. A finance quote is the monthly instalment, the tenure and the down \
+payment; the customer does not need the internal rate, the retained ratio or \
+the total profit. Reproducing the whole calculation reads as a system dump, \
+and a reply listing thirty numbers is a reply nobody finishes.
+- Round money to whole dirhams and write it plainly — "10,620 AED", never \
+"10620.0 AED".
 - Be warm, brief and specific. No corporate filler. Never write \
 "Thank you for reaching out" or "Best regards, Alto Motors". You are already \
 in a conversation with them.
@@ -454,7 +468,10 @@ Preserve the disclaimer. Return only the Arabic text."""
         allow_auto_send: bool = False,
     ) -> tuple[DraftReply, TokenUsage, str]:
         context = self._build_context(conversation, chunks, tool_results)
-        model_tier = tier or ModelTier.FAST
+        # Premium by default: an escalating turn passes `model_tier=None`, and
+        # falling back to the fast model spent 34s writing a draft a human was
+        # going to review anyway. See router.py for the measurement.
+        model_tier = tier or ModelTier.PREMIUM
 
         response = await self._router.complete(
             system=self.SYSTEM, user=context, tier=model_tier, temperature=0.3
@@ -586,7 +603,7 @@ def _format_tool_result(payload: Any) -> str:
                     lines.append(f"{key}:")
                     lines.append(_indent(nested))
             else:
-                lines.append(f"- {key}: {value}")
+                lines.append(f"- {key}: {_plain_number(value)}")
         return "\n".join(lines)
     if isinstance(payload, list):
         lines = []
@@ -597,6 +614,18 @@ def _format_tool_result(payload: Any) -> str:
                 lines.append(f"- {item}")
         return "\n".join(lines)
     return str(payload)
+
+
+def _plain_number(value: Any) -> Any:
+    """Render a whole-number float without its trailing `.0`.
+
+    The model copies these figures verbatim, so `10620.0` in the briefing
+    became "10620.0 AED" in front of a customer. Handing it `10620` costs
+    nothing and removes the temptation.
+    """
+    if isinstance(value, float) and not isinstance(value, bool) and value.is_integer():
+        return int(value)
+    return value
 
 
 def _indent(text: str) -> str:
@@ -644,12 +673,13 @@ class HumanReviewQueue:
         conversation: ConversationState,
         decision: RoutingDecision,
         draft: DraftReply | None = None,
+        grounding: GroundingReport | None = None,
     ) -> HumanReviewItem:
         primary = conversation.intents.primary
         item = HumanReviewItem(
             conversation_id=conversation.conversation_id,
             intent_id=primary.id if primary else None,
-            reason=escalation_reason(decision),
+            reason=escalation_reason(decision, grounding),
             department=decision.department,
             draft=draft,
             routing=decision,

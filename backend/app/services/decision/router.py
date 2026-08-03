@@ -117,7 +117,16 @@ def route(
         return RoutingDecision(
             tier=RoutingTier.AUTO,
             department=department,
-            model_tier=ModelTier.FAST,
+            # Premium, despite this being the confident band. `model_tier`
+            # only ever selects the *writing* model, and the fast tier is not
+            # fast at writing: measured on one three-intent reply, gpt-5-mini
+            # took 34-36s and 4,200 completion tokens where gpt-4o took 2.6-3.0s
+            # and 252 — twelve times quicker, a shorter reply, and cheaper
+            # once the token counts are multiplied out. The fast/premium
+            # split assumed cheap implied quick; for this pair it does not.
+            # Understanding still runs on the fast model, which is where
+            # gpt-5-mini earns its place (see settings.openai_fast_model).
+            model_tier=ModelTier.PREMIUM,
             rule_id="score_auto",
             rationale=(
                 f"Score {score:.0f} clears the automatic threshold of "
@@ -159,13 +168,29 @@ def route(
     )
 
 
-def escalation_reason(decision: RoutingDecision) -> HumanReviewReason:
+def escalation_reason(
+    decision: RoutingDecision, grounding: GroundingReport | None = None
+) -> HumanReviewReason:
     """Why this reached a person, recorded verbatim on the queue item.
 
     Decomposable on purpose: a spike in `low_confidence` is a model problem
     and a spike in `grounding_failed` is a retrieval problem, and they need
     different fixes.
+
+    Grounding is checked first because it happens *after* routing. A draft
+    can be tiered `auto` at a score of 92 and still be rejected for quoting a
+    figure no tool produced — and reading only the routing decision recorded
+    that as `low_confidence`, which is both false and the opposite of
+    actionable. Seen in production: score 91.99, every signal healthy, an
+    unsupported number in the draft, filed under low confidence.
     """
+    if grounding is not None and not grounding.passes:
+        return (
+            HumanReviewReason.UNSUPPORTED_FINANCIAL_CLAIM
+            if grounding.has_unsupported_numeric_claim
+            else HumanReviewReason.GROUNDING_FAILED
+        )
+
     mapping = {
         "complaint_always_human": HumanReviewReason.COMPLAINT,
         "negative_high_urgency": HumanReviewReason.NEGATIVE_SENTIMENT,

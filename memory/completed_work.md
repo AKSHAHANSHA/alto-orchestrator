@@ -1154,3 +1154,104 @@ cannot run this pipeline at any speed. Speed was never the deciding
 property.
 
 A unit test now pins that `_wrap_with_context` emits the exact slot key.
+
+## 2026-08-03 — Grounding failures were filed as "low confidence"
+
+Found by testing the live deployment rather than the local build.
+
+The headline three-intent message escalated with:
+```
+score      : 91.99   (tier=auto, every signal healthy)
+grounding  : ungrounded, has_unsupported_numeric_claim=True
+ESC REASON : low_confidence          <- false
+```
+Confidence was 92. It escalated because the draft quoted a figure no tool
+produced — which is the safety net working — but the queue recorded it as a
+confidence problem.
+
+**Cause**: `escalation_reason()` read only the `RoutingDecision`, which is
+computed *before* grounding runs. With no hard override applied it fell
+through to `LOW_CONFIDENCE`. Grounding failures on `auto`-tiered replies
+were therefore invisible in the escalation breakdown.
+
+This defeats the property `HumanReviewReason`'s own docstring claims: *"a
+spike in LOW_CONFIDENCE is a model problem, a spike in GROUNDING_FAILED is
+a retrieval problem, and they need different fixes."* Every
+grounding failure above the auto threshold was being counted against the
+wrong one.
+
+**Fixed**: `escalation_reason(decision, grounding)` checks the grounding
+report first, distinguishing `UNSUPPORTED_FINANCIAL_CLAIM` from
+`GROUNDING_FAILED`, and falls back to the routing-based mapping unchanged
+when grounding passed or is absent. `escalate_human` passes
+`state["grounding"]` through. The customer-facing banner already read this
+reason, so it was also telling customers the wrong thing.
+
+### Still open
+- The generator emits an unsourced figure on long multi-intent replies
+  (26 claims, faithfulness 0.846 — above the 0.8 bar, but one bad number
+  condemns the draft by design). Which figure is unsourced has not been
+  traced yet.
+- `generate` took **47s** on that turn. Latency remains the dominant UX
+  problem and is unaddressed.
+
+273 tests pass, ruff clean, mypy strict clean.
+
+## 2026-08-03 — The headline reply: 47s and escalating, to 2.7s and automatic
+
+Two problems with one measurement session. Both were found by tracing the
+live deployment rather than reasoning about the code.
+
+### 1. Grounding was condemning its own tool output
+The three-intent reply escalated with five "unsourced" figures — 10620.0,
+42480.0, 801.0, 48060.0, 8500.0. Every one came from the EMI and trade-in
+tools. `_tool_numbers` canonicalised `10620.0` to `"10620"` while the draft
+echoed `"10620.0"`, and the comparison is textual: `"10620.0" != "10620"`.
+
+A correct, fully-sourced quote was being rejected for how a number was
+spelled. Fixed with `_canonical()` applied to both sides, so 150,000,
+150000 and 150000.0 all agree — while a genuinely different figure still
+fails (tested both directions).
+
+### 2. The generator was dumping the tool payload at the customer
+The draft reproduced the finance and valuation results field by field,
+including `retained_ratio: 0.23`, `Rate band: no_salary_transfer` and
+`Monthly rate: 0.004158333333333333`. 38 claims, ~2,500 characters. Raw
+field names in front of a buyer — the same class of leak as the intent
+categories, from a different source.
+
+Fixed with a prompt rule (quote the few figures that answer the question,
+never a raw field name, round money and write it plainly) and
+`_plain_number()`, which strips the trailing `.0` from whole floats before
+they reach the prompt so the model has nothing to copy.
+
+### 3. The "fast" model is not fast at writing
+Generation only, same input, measured twice each:
+
+| tier | model | latency | completion tokens | chars |
+|---|---|---|---|---|
+| fast | gpt-5-mini | 34.1s / 36.1s | 4218 / 4184 | 2534 / 2046 |
+| premium | gpt-4o | **3.0s / 2.6s** | **252 / 191** | 987 / 787 |
+
+Twelve times quicker, a shorter and better-scoped reply, and cheaper once
+the token counts are multiplied out: 4,218 output tokens at gpt-5-mini's
+$2.00/1M is $0.0084 against 252 at gpt-4o's $10.00/1M for $0.0025. The
+fast/premium split assumed cheap implied quick. For this pair it is the
+reverse — gpt-5-mini spends ~4,000 reasoning tokens writing prose.
+
+`model_tier` only ever selects the *writing* model, so the AUTO band now
+maps to PREMIUM and `ResponseGenerator.draft` defaults to PREMIUM.
+Understanding still runs on the fast model, which is where gpt-5-mini earns
+its place (it is the one that routes a one-word slot answer correctly).
+
+### Net effect on the headline three-intent message
+| | before | after |
+|---|---|---|
+| `generate` | 47.4s | **2.7s** |
+| completion tokens | ~4,200 | **240** |
+| draft length | ~2,500 chars | 891 |
+| grounding | ungrounded | **grounded, faithfulness 1.0** |
+| claims | 38 | 6 |
+| outcome | escalated to a human | **answered automatically** |
+
+278 tests pass, ruff clean, mypy strict clean.

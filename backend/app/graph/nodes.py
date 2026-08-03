@@ -439,7 +439,12 @@ def build_nodes(deps: Any) -> dict[str, NodeFn]:
         decision = state["routing"]
 
         item = await deps.human_queue.enqueue_for(
-            conversation, decision, draft=state.get("draft")
+            conversation,
+            decision,
+            draft=state.get("draft"),
+            # Grounding runs after routing, so the routing decision alone
+            # cannot say why a high-scoring reply was stopped.
+            grounding=state.get("grounding"),
         )
 
         return {

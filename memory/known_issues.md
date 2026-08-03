@@ -216,3 +216,26 @@ gcloud run services update-traffic alto-orchestrator-backend --region=us-central
 
 Prefer `--to-latest` over `--to-revisions` whenever cleaning up a tagged
 test revision, so the service returns to its default behaviour.
+
+### Reasoning-tier models keep failing this workload — four for four
+Every model trialled that supports reasoning tokens has failed on one of
+the two jobs here, always the same way: it spends budget deliberating on a
+task that needs following, not thinking.
+
+| model | job | failure |
+|---|---|---|
+| Gemini 2.5 Flash | clarification JSON | thinking consumed the output budget, JSON never closed |
+| GPT-OSS-20B (Groq) | clarification JSON | `json_validate_failed`, 3/6 runs |
+| gpt-4o-mini | slot routing | one-word answer filed to the wrong slot, 3/3 |
+| gpt-5.6-luna | slot routing | same, 0/3 — `old_vehicle_model` for a new-vehicle brand |
+
+**The slot-routing test is the gate for the fast tier.** Ask "which brand?",
+answer "Renzo", and check the value lands in `new_vehicle_brand`. Get it
+wrong and the conversation loops on that question forever while the
+trade-in record fills with a car the customer never owned. gpt-5-mini
+passes 3/3; nothing cheaper has.
+
+Run it before adopting any fast-tier model. It is three turns and catches
+what an aggregate escalation-rate metric cannot — those turns route to
+`clarify`, so confidence reads `None` and a harness scores the loop as "no
+failure".

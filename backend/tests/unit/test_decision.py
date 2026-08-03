@@ -25,9 +25,11 @@ from app.domain.enums import (
 )
 from app.domain.value_objects import (
     Claim,
+    ConfidenceVector,
     ExtractedEntity,
     GroundingReport,
     LanguageProfile,
+    RoutingDecision,
     Sentiment,
 )
 from app.services.decision import confidence as conf
@@ -216,7 +218,13 @@ class TestConfidenceSignals:
 
 
 class TestRouting:
-    def test_high_confidence_routes_to_the_fast_model(self) -> None:
+    def test_high_confidence_answers_automatically_on_the_writing_model(self) -> None:
+        # `model_tier` selects the model that *writes the reply*, and the
+        # fast tier is not fast at writing: gpt-5-mini measured 34-36s and
+        # 4,200 completion tokens on a three-intent reply where gpt-4o took
+        # under 3s and 252. Answering automatically is about the routing
+        # tier; which model writes it is a separate question, and the
+        # premium model wins it on latency, length and cost.
         from app.domain.value_objects import ConfidenceVector
 
         vector = ConfidenceVector(
@@ -225,7 +233,7 @@ class TestRouting:
         )
         decision = route(state(intent(IntentCategory.VEHICLE_AVAILABILITY_INFO)), vector)
         assert decision.tier is RoutingTier.AUTO
-        assert decision.model_tier is ModelTier.FAST
+        assert decision.model_tier is ModelTier.PREMIUM
 
     def test_mid_confidence_routes_to_the_premium_model(self) -> None:
         from app.domain.value_objects import ConfidenceVector
@@ -338,3 +346,68 @@ class TestDepartmentRouting:
         # The model never makes this call; policy does.
         queue = enrich(IntentQueue(intents=(intent(category, primary=True),)))
         assert decide_department(state(*queue.intents)) is expected
+
+
+class TestEscalationReasonReflectsWhatActuallyStopped:
+    """The queue reason has to be actionable, not merely present.
+
+    Seen in production: score 91.99, every signal healthy, tier `auto`, and
+    the draft rejected for quoting a figure no tool produced — filed as
+    `low_confidence`. That reading came from the routing decision alone,
+    which is computed *before* grounding runs and therefore cannot know.
+    A spike in `low_confidence` sends someone to look at the model; a spike
+    in `unsupported_financial_claim` sends them to look at the tools.
+    """
+
+    def _decision(self, score: float) -> RoutingDecision:
+        return RoutingDecision(
+            tier=RoutingTier.AUTO,
+            department=Department.SALES,
+            model_tier=ModelTier.FAST,
+            rule_id="score_auto",
+            rationale="clears the automatic threshold",
+            confidence=ConfidenceVector(
+                language=0.95, intent=0.92, entity=0.98,
+                retrieval=0.94, risk=0.8, policy=1.0,
+                decision_score=score,
+            ),
+        )
+
+    def test_an_unsourced_figure_is_named_as_such(self) -> None:
+        grounding = GroundingReport(
+            verdict=GroundingVerdict.UNGROUNDED,
+            claims=(
+                Claim(text="The instalment is 801 AED.", is_numeric=True),
+            ),
+            faithfulness_score=0.85,
+        )
+        assert (
+            escalation_reason(self._decision(91.99), grounding)
+            is HumanReviewReason.UNSUPPORTED_FINANCIAL_CLAIM
+        )
+
+    def test_a_qualitative_grounding_failure_is_distinguished(self) -> None:
+        grounding = GroundingReport(
+            verdict=GroundingVerdict.UNGROUNDED,
+            claims=(Claim(text="We are the best dealer around.", is_numeric=False),),
+            faithfulness_score=0.0,
+        )
+        assert (
+            escalation_reason(self._decision(91.99), grounding)
+            is HumanReviewReason.GROUNDING_FAILED
+        )
+
+    def test_a_passing_report_does_not_mask_the_real_reason(self) -> None:
+        grounding = GroundingReport(
+            verdict=GroundingVerdict.GROUNDED, claims=(), faithfulness_score=1.0
+        )
+        assert (
+            escalation_reason(self._decision(40.0), grounding)
+            is HumanReviewReason.LOW_CONFIDENCE
+        )
+
+    def test_no_grounding_report_keeps_the_previous_behaviour(self) -> None:
+        assert (
+            escalation_reason(self._decision(40.0))
+            is HumanReviewReason.LOW_CONFIDENCE
+        )
