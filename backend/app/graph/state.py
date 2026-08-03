@@ -53,7 +53,23 @@ def merge_intents(
 
     # A whole queue means "this is the new truth" — the planner recomputing
     # departments and slots must not be merge-folded back into stale values.
+    #
+    # An *empty* queue is the exception, and getting this wrong silently
+    # destroyed the guarantee in this module's docstring. `initial_state()`
+    # seeds `intents=IntentQueue()`, and on every turn after the first
+    # LangGraph folds that seed into the checkpointed state — so an empty
+    # queue arrived claiming to be the new truth and wiped every unresolved
+    # intent the conversation had accumulated. A customer asking about a
+    # trade-in, financing and a test drive lost two of the three the moment
+    # they answered a follow-up question.
+    #
+    # No node ever empties the queue deliberately: `enrich` and
+    # `recompute_missing_slots` return exactly the intents they were given.
+    # So an empty queue is not an assertion that nothing is open — it is the
+    # absence of an opinion, and the accumulated truth survives it.
     if isinstance(incoming, IntentQueue):
+        if not incoming.intents and current.intents:
+            return current
         return incoming
 
     return current.merge(incoming)

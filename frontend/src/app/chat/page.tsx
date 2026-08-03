@@ -7,6 +7,7 @@ import {
   fmt,
   type Chunk,
   type InquiryResponse,
+  type Span,
   type TranscriptTurn,
 } from "@/lib/api";
 import { CalendarPicker } from "@/components/CalendarPicker";
@@ -380,7 +381,9 @@ function AssistantTurn({ turn }: { turn: Turn }) {
                 </strong>
               </li>
             )}
-            {routing && <li>{tierLabel(routing.tier)}</li>}
+            {routing && (
+              <li>{outcomeLabel(routing.tier, response.escalated)}</li>
+            )}
             <li className="tabular">
               {response.total_latency_ms.toFixed(0)} ms
             </li>
@@ -391,8 +394,17 @@ function AssistantTurn({ turn }: { turn: Turn }) {
 
           {response.escalated && (
             <p className="mt-5 border-l-2 border-signal bg-offset px-5 py-3 text-caption">
-              A colleague is reviewing this before it reaches you.
-              {routing?.rationale ? ` ${routing.rationale}` : ""}
+              A colleague is reviewing this before it reaches you
+              {(() => {
+                const reason = escalationReason(response.spans);
+                if (reason) return ` — ${reason}.`;
+                // Only fall back to the routing rationale when routing is
+                // what escalated it; otherwise it describes a decision that
+                // was overtaken by events.
+                return routing?.tier === "human" && routing.rationale
+                  ? ` — ${routing.rationale}`
+                  : ".";
+              })()}
             </p>
           )}
 
@@ -409,10 +421,46 @@ function AssistantTurn({ turn }: { turn: Turn }) {
   );
 }
 
-function tierLabel(tier: string): string {
+/**
+ * What actually happened to this reply.
+ *
+ * `routing.tier` alone is not the answer. Routing is decided before the
+ * reply is written, so a draft that scores 91 is tiered `auto` and only
+ * fails its grounding check afterwards — leaving the tier saying
+ * "answered automatically" on a message that went to a person. The
+ * escalation flag is set later and is the one that reflects the outcome.
+ */
+function outcomeLabel(tier: string, escalated: boolean): string {
+  if (escalated) return "Passed to a person";
   if (tier === "auto") return "Answered automatically";
   if (tier === "premium") return "Reviewed by the premium model";
   return "Passed to a person";
+}
+
+const ESCALATION_REASONS: Record<string, string> = {
+  low_confidence: "the confidence score was too low to answer automatically",
+  grounding_failed: "the drafted reply could not be traced to our documents",
+  complaint: "it was read as a complaint",
+  negative_sentiment: "the message reads as frustrated",
+  unsupported_financial_claim: "the draft quoted a figure no tool produced",
+  policy_requires_approval: "policy requires a person to approve this",
+  previously_human_handled: "a colleague is already handling this conversation",
+  awaiting_operator_reply: "a colleague is already handling this conversation",
+};
+
+/**
+ * Why it went to a person, in the customer's language.
+ *
+ * Prefers the recorded escalation reason over `routing.rationale`, which
+ * explains the *score band* and reads as a contradiction when a
+ * high-scoring reply is escalated for an unrelated reason — "Score 91
+ * clears the automatic threshold" printed directly beneath "a colleague is
+ * reviewing this".
+ */
+function escalationReason(spans: Span[]): string | null {
+  const span = spans.find((s) => s.node === "escalate_human");
+  const reason = span?.attributes?.reason;
+  return typeof reason === "string" ? ESCALATION_REASONS[reason] ?? null : null;
 }
 
 /**

@@ -15,6 +15,7 @@ from __future__ import annotations
 from app.domain.entities import Intent, IntentQueue
 from app.domain.enums import EntityType, IntentCategory, IntentStatus
 from app.domain.policies import IntentPolicy, intent_policy
+from app.domain.slots import is_slot_filled
 from app.domain.value_objects import Plan, PlanStep
 
 # Slot equivalences.
@@ -28,28 +29,6 @@ from app.domain.value_objects import Plan, PlanStep
 #
 # The dict is one-way: a required slot on the left is satisfied by *any* of
 # the entity types on the right (in addition to itself).
-_SLOT_ALIASES: dict[EntityType, tuple[EntityType, ...]] = {
-    EntityType.VEHICLE_REFERENCE: (
-        EntityType.NEW_VEHICLE_BRAND,
-        EntityType.NEW_VEHICLE_MODEL,
-        EntityType.OLD_VEHICLE_BRAND,
-        EntityType.OLD_VEHICLE_MODEL,
-    ),
-}
-
-
-def _is_slot_filled(slot: EntityType, filled: set[EntityType]) -> bool:
-    """Whether a required slot has been satisfied.
-
-    Directly filled counts; and so does any alias declared in `_SLOT_ALIASES`.
-    Kept as a helper rather than expanding `filled` at the caller so callers
-    only ever operate on real extracted entities, and the alias rule lives in
-    exactly one place.
-    """
-    if slot in filled:
-        return True
-    return any(alias in filled for alias in _SLOT_ALIASES.get(slot, ()))
-
 # Human-readable action verbs per category, used in the plan and in the
 # admin UI. Kept beside the planner rather than in policy because they
 # describe what this code does, not a business rule that gets tuned.
@@ -130,7 +109,7 @@ def recompute_missing_slots(
 
         rule = policy.rule(intent.category)
         missing = tuple(
-            slot for slot in rule.required_slots if not _is_slot_filled(slot, filled)
+            slot for slot in rule.required_slots if not is_slot_filled(slot, filled)
         )
 
         status = intent.status

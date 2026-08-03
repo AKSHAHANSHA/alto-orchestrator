@@ -297,3 +297,87 @@ class TestPromptContext:
         assert "- financing — still need: down payment" in others
         # The test drive is what we are asking about, not an "other" request.
         assert "the test drive" not in others
+
+
+class TestNoInternalVocabularyReachesTheCustomer:
+    """Category names are notes to ourselves, not words for a buyer.
+
+    A drafted reply came back containing the context's own heading and a raw
+    category: "Open requests and what is still missing: - unclear needs
+    clarification — still need the items listed above". Both the clarifier
+    and the generator build that list, so both are covered here.
+    """
+
+    def test_every_category_has_a_customer_facing_label(self) -> None:
+        from app.domain.enums import IntentCategory
+        from app.services.execution.labels import INTENT_LABELS
+
+        missing = set(IntentCategory) - set(INTENT_LABELS)
+        assert not missing, (
+            "these categories would fall back to their raw enum value in a "
+            f"customer-facing prompt: {sorted(c.value for c in missing)}"
+        )
+
+    def test_no_label_is_just_the_enum_value(self) -> None:
+        from app.services.execution.labels import INTENT_LABELS
+
+        offenders = {
+            category.value: label
+            for category, label in INTENT_LABELS.items()
+            if label == category.value.replace("_", " ")
+        }
+        assert not offenders, f"labels that are still internal wording: {offenders}"
+
+    def test_the_worst_offender_is_specifically_handled(self) -> None:
+        from app.domain.enums import IntentCategory
+        from app.services.execution.labels import intent_label
+
+        label = intent_label(IntentCategory.UNCLEAR_NEEDS_CLARIFICATION)
+        assert "unclear" not in label.lower()
+        assert "clarification" not in label.lower()
+
+
+class TestRepeatedQuestions:
+    """Asking the identical question twice reads as not having listened."""
+
+    async def test_the_transcript_reaches_the_phraser(self) -> None:
+        # The model can only avoid repeating itself if it can see that it
+        # already asked. The rule is worthless without the evidence.
+        from datetime import UTC, datetime
+
+        from app.domain.value_objects import ConversationTurn
+
+        now = datetime.now(UTC)
+
+        phraser = StubPhraser({"en": "Which day suits you?"})
+        writer = ClarificationWriter(phraser)
+        await writer.write(
+            plan=plan_missing(EntityType.PREFERRED_DATE),
+            language=None,
+            conversation=ConversationState(
+                conversation_id="conv_repeat",
+                intents=IntentQueue(
+                    intents=(
+                        Intent(
+                            category=IntentCategory.TEST_DRIVE_BOOKING,
+                            confidence=0.9,
+                            missing_slots=(EntityType.PREFERRED_DATE,),
+                        ),
+                    )
+                ),
+                transcript=(
+                    ConversationTurn(role="assistant", text="Which day suits you?", at=now),
+                    ConversationTurn(role="customer", text="the red one", at=now),
+                ),
+            ),
+            tool_results={},
+        )
+
+        context = phraser.last_user_context or ""
+        assert "Conversation so far" in context
+        assert "the red one" in context
+
+    def test_the_prompt_forbids_repeating_verbatim(self) -> None:
+        from app.services.execution.clarification import SYSTEM
+
+        assert "never repeat yourself word for word" in SYSTEM

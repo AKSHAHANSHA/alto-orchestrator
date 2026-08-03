@@ -82,6 +82,13 @@ Never emit "Renzo Discovery" as a single model. The brand is always its own \
 slot.
 
 Extraction rules:
+- When the message is a short answer to a question the assistant just asked, \
+the bracketed note above it names the exact slot that was requested. Put the \
+value in *that* slot. "Renzo" answering a request for new_vehicle_brand is \
+new_vehicle_brand — never old_vehicle_brand, no matter how many other \
+vehicles the conversation has mentioned. A customer answering the question \
+they were asked is the single most common message you will see, and filing it \
+under the wrong slot loops the conversation on that question forever.
 - preferred_date accepts every date form: day names ("Saturday", \
 "tomorrow", "next Friday"), formatted dates ("08-08-2026", "8/8/2026", \
 "2026-08-08", "Aug 8", "8th August"), and relative phrases ("next week", \
@@ -114,10 +121,15 @@ def _wrap_with_context(text: str, previous_awaiting: str | None) -> str:
     """
     if not previous_awaiting:
         return text
-    label = previous_awaiting.replace("_", " ")
+    # The raw slot name, not a prettified label. This string is read by a
+    # model deciding which slot to write to, so it should match the slot
+    # exactly — "new vehicle brand" invited a guess between the new_* and
+    # old_* families, and gpt-4o-mini guessed wrong 3/3 on a one-word reply.
+    # (Customer-facing text goes the other way; see execution/labels.py.)
     return (
-        f"[The assistant just asked the customer for their {label}. "
-        f"Interpret the message as an answer to that question if it fits.]\n\n"
+        f"[The assistant just asked the customer for: {previous_awaiting}. "
+        f"If this message answers that question, put the value in the "
+        f"{previous_awaiting} slot specifically.]\n\n"
         f"Customer message: {text}"
     )
 

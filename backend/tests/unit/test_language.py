@@ -251,3 +251,29 @@ class TestBriefScenarios:
         assert profile.primary is Language.ARABIC
         assert profile.requires_bilingual_reply
         assert "2020" in text
+
+
+class TestSlotAnsweringContext:
+    """A short answer must be steered to the exact slot that was asked for.
+
+    Getting this wrong loops the conversation forever: the customer answers,
+    the value lands in a neighbouring slot, and the same question is asked
+    again. It is the failure that disqualified gpt-4o-mini from the fast
+    tier despite being several times quicker.
+    """
+
+    def test_the_exact_slot_name_is_given_not_a_prettified_label(self) -> None:
+        from app.services.understanding.engine import _wrap_with_context
+
+        wrapped = _wrap_with_context("Renzo", "new_vehicle_brand")
+
+        # The raw slot, so the model matches rather than guesses between the
+        # new_* and old_* families.
+        assert "new_vehicle_brand" in wrapped
+        assert "new vehicle brand" not in wrapped
+        assert "Renzo" in wrapped
+
+    def test_no_pending_question_leaves_the_message_untouched(self) -> None:
+        from app.services.understanding.engine import _wrap_with_context
+
+        assert _wrap_with_context("hello there", None) == "hello there"

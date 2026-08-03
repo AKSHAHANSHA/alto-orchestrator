@@ -31,6 +31,7 @@ from app.domain.value_objects import DraftReply, RetrievedChunk, RoutingDecision
 from app.services.decision.router import escalation_reason
 from app.services.execution.catalog import VehicleCatalogService
 from app.services.execution.finance_tools import EmiRequest, calculate_emi
+from app.services.execution.labels import intent_label
 from app.services.execution.valuation_tools import ValuationRequest, estimate_trade_in
 
 logger = get_logger(__name__)
@@ -73,19 +74,26 @@ class ToolRunner:
         results: dict[str, Any] = {}
         categories = {i.category for i in conversation.intents.unresolved}
 
-        # Structured catalog lookup runs first for any intent that names a
-        # specific vehicle — its outcome informs both the trade-in tool
-        # (which needs an MSRP) and the generator (which needs to be honest
-        # if we don't stock the vehicle asked about).
-        needs_catalog = categories & {
-            IntentCategory.VEHICLE_AVAILABILITY_INFO,
-            IntentCategory.PRICING_OFFERS,
-            IntentCategory.TEST_DRIVE_BOOKING,
-            IntentCategory.FINANCING_EMI,
-            IntentCategory.TRADE_IN_VALUATION,
-        }
+        # Structured catalog lookup runs first — its outcome informs both the
+        # trade-in tool (which needs an MSRP) and the generator (which needs
+        # to be honest if we don't stock the vehicle asked about).
+        #
+        # Gated on a vehicle actually being named, not on the intent category.
+        # A one-word reply like "Renzo" classifies as
+        # `unclear_needs_clarification`, which no category list here included,
+        # so the lookup was skipped while brand and model sat filled in the
+        # conversation. Handed no catalog record, the generator told customers
+        # "I do not see a Renzo S5 in our vehicle records" — we stock several.
+        # `_run_catalog_lookups` already no-ops unless a brand and model are
+        # present, so the category test was never what made this safe.
+        new_ref = conversation.vehicle_of_interest()
+        old_ref = conversation.trade_in_vehicle()
+        names_a_vehicle = bool(
+            (new_ref.brand and new_ref.model) or (old_ref.brand and old_ref.model)
+        )
+
         catalog_lookups: dict[str, Any] = {}
-        if needs_catalog and self._catalog_lookup_service is not None:
+        if names_a_vehicle and self._catalog_lookup_service is not None:
             catalog_lookups = await self._run_catalog_lookups(conversation)
             if catalog_lookups:
                 results["catalog"] = catalog_lookups
@@ -391,7 +399,15 @@ or adjust a number yourself. If a figure is not supplied, do not state one.
 - You have no clock and no calendar. Never state the current time, today's \
 date or the day of the week — not even in a greeting. Say "Good morning" if \
 you like, but never "it is currently 09:00". Opening hours from the \
-documents are fine; the time right now is not something you know.
+documents are fine; the time right now is not something you know. If someone \
+asks about "today" or "right now", give the full published schedule and let \
+them match the day themselves — never answer with a bare "yes, we are open".
+- Everything you assert must be traceable to the supporting documents or the \
+authoritative figures. When you answer from a document, reuse its concrete \
+wording — the actual hours, the actual rule, the actual limit. "Weekdays \
+09:00 to 21:00, Friday from 14:00" is an answer; "you can visit during our \
+opening hours" restates the question and cannot be checked against anything. \
+Prefer the specific sentence you can point to over a general assurance.
 - Before you finish a reply, check every line under "Open requests and what is \
 still missing". If the one you are acting on this turn is not the only one \
 listed, say what is still needed for each of the others too, even in one short \
@@ -405,6 +421,11 @@ catalog says the vehicle is not stocked, say that plainly instead of guessing.
 - If the customer just answered a question you asked, acknowledge the answer \
 in one short phrase and move to the next step — either the next missing piece \
 of information, or the action itself if you have everything you need.
+- The context below is your briefing, not a template. Never repeat its \
+headings, its bullet lists or its labels back to the customer — no "Open \
+requests and what is still missing", no "still need:", no category names. \
+Write the reply as one person writing to another; the customer must not be \
+able to tell what the briefing looked like.
 - Be warm, brief and specific. No corporate filler. Never write \
 "Thank you for reaching out" or "Best regards, Alto Motors". You are already \
 in a conversation with them.
@@ -492,7 +513,7 @@ Preserve the disclaimer. Return only the Arabic text."""
         if conversation.intents.unresolved:
             lines.append("## Open requests and what is still missing")
             for intent in conversation.intents.ordered():
-                label = intent.category.value.replace("_", " ")
+                label = intent_label(intent.category)
                 if intent.missing_slots:
                     missing = ", ".join(
                         s.value.replace("_", " ") for s in intent.missing_slots
@@ -520,7 +541,10 @@ Preserve the disclaimer. Return only the Arabic text."""
                 lines.append(_format_tool_result(payload))
 
         if chunks:
-            lines.append("\n## Supporting documents")
+            lines.append(
+                "\n## Supporting documents "
+                "(the only source for anything you state — reuse their wording)"
+            )
             for chunk in chunks[:5]:
                 source = chunk.metadata.get("source", chunk.doc_id)
                 lines.append(f"\n[{chunk.chunk_id}] ({source})\n{chunk.text[:600]}")

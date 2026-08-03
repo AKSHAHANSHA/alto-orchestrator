@@ -813,3 +813,344 @@ claims, `escalated: False`, reply "Good morning! How can I assist you today?"
 with no invented time, and present in the stored transcript.
 
 244 tests pass, ruff clean, mypy strict clean.
+
+## 2026-08-03 — The entity signal was scoring 0.00 on correctly extracted facts
+
+Reported as "single-word answers crater confidence". Four of my five initial
+diagnoses were wrong; live traces found the real cause.
+
+### The planner and the confidence engine disagreed about the same fact
+A short reply often classifies as `unclear_needs_clarification`, whose only
+required slot is `vehicle_reference`. The extractor never produces that slot
+— it produces the *more specific* `new_vehicle_brand` and
+`new_vehicle_model`. `score_entity` did a plain set intersection:
+
+```python
+filled = state.filled_slots & required   # {brand, model} & {vehicle_reference} = ∅
+if not filled: return 0.0
+```
+
+Meanwhile `recompute_missing_slots` already applied `_SLOT_ALIASES`, which
+says a brand or model satisfies `vehicle_reference`. So the planner stopped
+asking "which vehicle?" while the scorer reported knowing nothing and
+escalated. Traced state showed three entities extracted at 0.95+ and an
+entity signal of 0.00 on the same turn.
+
+**Fixed** by moving the alias rule to `app/domain/slots.py` — domain
+knowledge both services need, and single ownership by one service is how
+they drifted. Added `satisfying_types()` so the averaged confidence comes
+from the entities that actually satisfied the requirement rather than
+crediting a slot while averaging unrelated entities.
+
+### Measured, 5 trials per scenario, before and after
+| scenario | entity==0.00 before | after |
+|---|---|---|
+| single-word "Renzo" | 2/5 | **0/5** |
+| variant spec-line | 3/5 | **0/5** |
+
+Entity now scores 0.85–0.99 where it previously read zero.
+
+### What it uncovered: grounding is the real bottleneck
+Escalation did **not** fall proportionally (C 3/5 → 4/5, D 5/5 → 4/5).
+Post-fix scores clear the auto threshold — 92.26, 93.51 — and the runs
+escalate anyway, which can only happen *after* routing. That is the
+grounding check.
+
+The entity bug had been masking it by escalating those turns earlier on
+score. Fixing it pushed the traffic further down the graph into the place
+that actually fails.
+
+Scenario A confirms this independently: score is deterministic at 92.87
+across all 10 runs (5 before, 5 after) and my fix does not touch its code
+path, yet escalation moved 4/5 → 2/5 purely on generator variance. The runs
+that pass are the ones that quote the corpus ("Walk-ins are welcome during
+our opening hours: Weekd…"); the ones that fail are vaguer and fall under
+`_overlaps`' 0.25 content-word threshold.
+
+**Open question, not yet actioned:** whether to push the generator to quote
+the corpus more consistently (safe) or relax qualitative-claim overlap
+(weakens the net that catches real hallucinations). Numeric claims must stay
+strict either way.
+
+253 tests pass, ruff clean, mypy strict clean.
+
+## 2026-08-03 — Teaching the generator to be checkable (grounding pass rate)
+
+Follow-on from the entity-scoring fix, which revealed that grounding failure
+had become the dominant escalation cause. Two prompt edits, measured on the
+same 5-trial harness:
+
+1. A traceability rule with a concrete contrast — *"Weekdays 09:00 to 21:00,
+   Friday from 14:00" is an answer; "you can visit during our opening hours"
+   restates the question and cannot be checked against anything.*
+2. Closed a hedge introduced by the earlier "you have no clock" rule: asked
+   about *today*, the model could not identify the day and retreated to a
+   bare "yes, we are open". It now gives the full published schedule and
+   lets the customer match the day.
+
+Also relabelled the context section from a passive `## Supporting documents`
+to one naming them as the only source and asking for their wording.
+
+### Measured across three runs of the identical harness
+| scenario | metric | baseline | after slot fix | after prompt |
+|---|---|---|---|---|
+| A "open today?" | escalated | 4/5 | 2/5 | **0/5** |
+| A | stated hours | 1/5 | 3/5 | **5/5** |
+| C single-word | entity==0.00 | 2/5 | 0/5 | 0/5 |
+| C | escalated | 3/5 | 4/5 | 5/5 |
+| D variant line | entity==0.00 | 3/5 | 0/5 | 0/5 |
+| D | escalated | 5/5 | 4/5 | 5/5 |
+
+**A is decisively fixed** — every run now quotes the schedule and passes
+grounding, on a scenario whose confidence score is deterministic at 92.87
+across all 20 runs, so the change is purely generation quality.
+
+**C and D did not improve.** Their escalations have different causes:
+- D scores genuinely low (52–79, weakest `policy` or `intent`). A spec-line
+  reply like "Automated Manual, 333hp, … 54100 AED" really does confuse
+  intent classification, and escalating when unsure is the designed
+  behaviour, not a bug. The UX is poor; the decision is defensible.
+- C twice scored above the auto threshold (93.51, 92.26) and escalated
+  anyway, which can only be grounding. Still unexplained — worth its own
+  trace before anything is changed.
+
+Movement from 4/5 to 5/5 in C and D is one run and sits inside this
+harness's known variance; it should not be read as a regression.
+
+**Not attempted:** relaxing `_overlaps`' 0.25 threshold. Numeric claims must
+stay strict regardless, and weakening the qualitative path is the option
+that trades away the net that catches real hallucinations.
+
+## 2026-08-03 — The intent queue was wiped on every turn after the first
+
+The customer reported this early ("after one intent it is done… it is
+forgetting the intents") and was told the queue was working. They were
+right.
+
+### Mechanism
+`initial_state()` seeds `intents=IntentQueue()`. On every turn after the
+first, LangGraph folds that seed into the checkpointed state through
+`merge_intents`, which treated *any* `IntentQueue` as "the new truth" —
+including an empty one. Every accumulated unresolved intent was destroyed.
+
+```
+after turn 1 : ['test_drive_booking', 'trade_in_valuation']
+initial_state hands in: intents=()
+after reducer: []           <- QUEUE WIPED
+```
+
+`IntentQueue.merge` was always correct; the loss was one level up, in the
+reducer that `state.py`'s own docstring calls the place where "never lose an
+unresolved intent" becomes a property of the data structure.
+
+**Fixed**: an empty queue is the absence of an opinion, not an assertion
+that nothing is open. No node empties the queue deliberately — `enrich` and
+`recompute_missing_slots` return exactly the intents they were given — so
+the planner's authoritative replace still works (verified: priority and
+department survive).
+
+### Verified working
+Intents now persist *and* accumulate across turns:
+```
+T1 [test_drive_booking, trade_in_valuation]
+T2 [test_drive_booking, trade_in_valuation, unclear_needs_clarification]
+T3 [test_drive_booking, trade_in_valuation, pricing_offers, unclear...]
+```
+Growth is bounded — `merge` is by category, so a repeated category updates
+in place rather than appending.
+
+### Also fixed this session
+- **Catalog lookup gated on intent category** rather than on a vehicle being
+  named. `unclear_needs_clarification` was absent from the list, so a
+  one-word reply skipped the lookup entirely and the generator told
+  customers *"I do not see a Renzo S5 in our vehicle records"* — we stock
+  several. Now gated on brand+model being present, which is what
+  `_run_catalog_lookups` already required anyway.
+- **UI showed `routing.tier` while ignoring `escalated`**, so a
+  grounding-failed reply displayed "Answered automatically" above "a
+  colleague is reviewing this". The banner now reads the real reason from
+  the `escalate_human` span.
+
+### Measured, 5 trials per scenario, five successive versions
+| scenario | metric | base | +slot | +prompt | +catalog | +reducer |
+|---|---|---|---|---|---|---|
+| A "open today?" | escalated | 4/5 | 2/5 | 0/5 | 1/5 | 3/5 |
+| B | queue emptied | 1/5 | 2/5 | 1/5 | 3/5 | **0/5** |
+| C single-word | escalated | 3/5 | 4/5 | 5/5 | 3/5 | **0/5** |
+| D variant line | escalated | 5/5 | 4/5 | 5/5 | 4/5 | **0/5** |
+| C / D | entity==0.00 | 2-3/5 | 0/5 | 0/5 | 0/5 | 0/5 |
+
+**Caution on reading this table.** Scenario A swung 4→2→0→1→3 across five
+samples while its confidence score stayed deterministic at 92.87 and its
+code path was untouched by three of the four fixes. That is the noise floor
+of n=5 on a non-deterministic generator. An earlier note in this file called
+A "decisively fixed" at 0/5 — that was over-claimed and is retracted.
+
+C and D reaching 0/5 *is* attributable, because the mechanism was traced
+rather than inferred: with intents preserved, those turns now route to
+`clarify` (confidence is `None` — the decision node never runs) instead of
+falling through to an escalation.
+
+### Known weakness, not yet addressed
+A reply that does not answer the pending question gets the same question
+back verbatim, with no acknowledgement of what was said:
+> T2 "Which model is your current car?"
+> T3 "Which model is your current car?"
+Not a regression — it previously escalated instead — but poor.
+
+262 tests pass, ruff clean, mypy strict clean.
+
+## 2026-08-03 — Internal vocabulary was reaching customers
+
+A drafted reply came back containing the prompt's own scaffolding:
+
+> **Open requests and what is still missing:**
+> - unclear needs clarification — still need the items listed above
+
+Two independent causes:
+
+1. **The raw enum leak, a second time.** `_build_context` in the generator
+   rendered intents as `category.value.replace("_", " ")` — the identical
+   bug fixed in the clarifier a day earlier, in the other module that builds
+   the same list. Extracted to `services/execution/labels.py` so both share
+   one mapping; `unclear_needs_clarification` now reads "which vehicle they
+   mean" rather than announcing our own uncertainty in our own vocabulary.
+2. **Heading echo.** Nothing told the generator the context was a briefing
+   rather than a template, so it occasionally reproduced the section
+   headings and bullet structure verbatim. Added an explicit rule: the
+   customer must not be able to tell what the briefing looked like.
+
+A test now fails if any future `IntentCategory` is added without a
+customer-facing label, and another fails if any label is merely the enum
+value with underscores swapped for spaces. The duplication is what let this
+recur — one module was fixed and the other was not.
+
+265 tests pass, ruff clean, mypy strict clean.
+
+### Correction: gpt-5-mini was over-blamed
+Earlier notes attributed turn-2 misclassification to `gpt-5-mini`
+variance. Much of it was the intent-queue wipe: with the queue emptied,
+a bare "Renzo" arrived with no prior intent to attach to, so
+`unclear_needs_clarification` was a *reasonable* reading. That was our bug,
+not the model's.
+
+What remains genuinely model-side, after the queue fix:
+- four different intent sets from one identical sentence (scenario B)
+- generation varying while the confidence score stays deterministic
+- 5.6–8.8s for intent discovery, up to 23s for generation
+
+A `gpt-5-mini` vs `gpt-4o-mini` comparison on the same harness is running.
+The hypothesis worth testing: the fast tier does three structured-extraction
+jobs, and a reasoning model is the wrong tool for short constrained
+extraction — the same pattern that broke Gemini 2.5 Flash and GPT-OSS-20B
+on the clarification JSON. Old `gpt-5-mini` numbers are contaminated by the
+queue bug and cannot serve as the baseline.
+
+## 2026-08-03 — Fast tier moved back to gpt-4o-mini
+
+Measured on the repeatability harness, both models run back to back so API
+conditions were comparable.
+
+| | gpt-5-mini | gpt-4o-mini | |
+|---|---|---|---|
+| A "open today?" | 32.4s | **5.2s** | 6.2x |
+| B two turns | 71.1s | **16.9s** | 4.2x |
+| C turn 2 | 32.3s | **9.2s** | 3.5x |
+| D turn 3 | 60.2s | **14.0s** | 4.3x |
+| headline 3-intent message | 44.6s | **16.0s** | 2.8x |
+
+**Quality did not degrade — it improved.** The prediction going in was that
+gpt-4o-mini would be weaker at multi-intent discovery, the hardest thing the
+fast tier does. The opposite held:
+
+- *"What colors are available and how much would the monthly payment be?"*
+  gpt-5-mini returned a lone `unclear_needs_clarification` in **5/5** runs,
+  losing the financing intent entirely. gpt-4o-mini returned
+  `[financing_emi, vehicle_availability_info]` in **5/5**.
+- Scenario B escalated **5/5** on gpt-5-mini, **0/5** on gpt-4o-mini — a
+  direct consequence of the above.
+- The headline three-intent message: **4/4 on both**, so the capability the
+  product is sold on is intact.
+- gpt-4o-mini was perfectly stable: identical intent sets across all five
+  runs of every scenario.
+
+Confidence scores sit marginally lower (91.62 vs 92.87) and still clear the
+premium threshold comfortably.
+
+### Why
+The fast tier does three structured-extraction jobs — intent
+classification, entity extraction, sentiment. A reasoning model is the wrong
+tool for short constrained extraction: it overthinks a classification and
+retreats to "unclear". This is the third instance of the same pattern in two
+days, after Gemini 2.5 Flash and GPT-OSS-20B both broke the clarification
+JSON by spending their output budget on reasoning.
+
+`gpt-4o-mini` accepts `temperature`, so the `gpt-5*` guard in the OpenAI
+adapter is untouched and switching back is a one-line env change.
+
+Models are now pinned explicitly in `backend-env.yaml` rather than
+inherited from the settings default, so what production runs is readable
+without opening the code.
+
+## 2026-08-03 — gpt-4o-mini trial REVERTED
+
+The entry above recommending gpt-4o-mini is superseded. The switch was
+applied and then reverted the same day.
+
+**Why**: asked "Which brand are you considering, Karva or Renzo?", a reply
+of "Renzo" was extracted as `old_vehicle_brand` — the *trade-in* brand —
+rather than `new_vehicle_brand`. 3/3 runs, deterministic. The conversation
+then loops on that question indefinitely, and the trade-in record is
+corrupted with a brand the customer never claimed to own. gpt-5-mini routes
+the identical reply correctly 3/3.
+
+**Why the comparison missed it**: the harness measured `entity == 0.00` and
+escalation rate. On gpt-4o-mini those turns route to `clarify`, so
+confidence is never computed — the metric read `None`, which scored as "no
+failure". The harness was blind to a conversation that politely loops
+forever. It only surfaced because the repeated-question fix made the model
+say the absurd part aloud: *"You previously mentioned Renzo, but to confirm:
+are you still considering Karva or Renzo?"*
+
+Lesson worth keeping: **a proxy metric that reads `None` on the failure path
+cannot detect that failure.** Both times a measurement misled today, it was
+because the metric did not correspond to what a customer would experience.
+
+**Not a settled verdict on the model.** `_wrap_with_context` already tells
+the extractor which slot was asked for, but `ENTITY_SYSTEM`'s old-vs-new
+disambiguation only covers a full sentence naming two vehicles — nothing
+says a bare one-word reply belongs to the slot that was requested.
+gpt-5-mini infers it; gpt-4o-mini does not. Fix that prompt and the 3.5-6x
+speed becomes available again, properly earned.
+
+Also noted: some gpt-5-mini latency is OpenAI-side rate limiting
+("Retrying request in 36 seconds"), not model speed — so the latency
+comparison overstated the gap.
+
+### Follow-up: the prompt fix did not rescue gpt-4o-mini
+
+`ENTITY_SYSTEM` now states that a short answer belongs in the slot the
+bracketed note names, and `_wrap_with_context` passes the raw slot key
+(`new_vehicle_brand`) rather than a prettified label ("new vehicle brand"),
+so the model matches rather than guesses between the new_* and old_*
+families.
+
+Measured after the change:
+- **gpt-4o-mini**: still wrong 3/3. It moved from `old_vehicle_brand` to
+  `old_vehicle_model` — a different wrong slot in the same wrong family.
+  An explicit instruction naming the exact target did not help.
+- **gpt-5-mini**: still correct 3/3. No regression.
+
+So this is a **model capability limit, not a prompt gap** — correcting an
+earlier note in this file that assumed the opposite. The change is kept as
+hardening: gpt-5-mini currently infers the right slot, but nothing
+guaranteed it would, and now the instruction is explicit.
+
+**gpt-4o-mini is disqualified for the fast tier**, and the reason is
+architectural rather than incidental. The whole clarification design is a
+one-question-per-turn loop: ask for a slot, receive a short answer, route it
+to that slot, move on. A model that cannot reliably do the routing step
+cannot run this pipeline at any speed. Speed was never the deciding
+property.
+
+A unit test now pins that `_wrap_with_context` emits the exact slot key.

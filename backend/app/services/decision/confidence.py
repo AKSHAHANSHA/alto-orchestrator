@@ -17,6 +17,7 @@ from __future__ import annotations
 from app.domain.entities import ConversationState
 from app.domain.enums import ConfidenceSignal, EntityType, IntentCategory
 from app.domain.policies import ConfidencePolicy, confidence_policy
+from app.domain.slots import satisfying_types
 from app.domain.value_objects import (
     ConfidenceVector,
     GroundingReport,
@@ -65,13 +66,27 @@ def score_entity(state: ConversationState) -> float:
     if not required:
         return 1.0 if not state.entities else _mean_entity_confidence(state)
 
-    filled = state.filled_slots & required
-    fill_rate = len(filled) / len(required)
+    # Satisfaction follows the domain rule, not a plain set intersection.
+    # `vehicle_reference` is required by `unclear_needs_clarification` and is
+    # never extracted directly — the extractor produces the more specific
+    # brand and model instead. Intersecting raw types scored a conversation
+    # holding "Renzo" + "S5" at 0.00 and escalated it, while the planner had
+    # already counted the same slot as filled and stopped asking.
+    filled_types = state.filled_slots
+    contributing: set[EntityType] = set()
+    satisfied = 0
 
-    if not filled:
+    for slot in required:
+        types = satisfying_types(slot, filled_types)
+        if types:
+            satisfied += 1
+            contributing |= types
+
+    if not contributing:
         return 0.0
 
-    return fill_rate * _mean_entity_confidence(state, restrict_to=filled)
+    fill_rate = satisfied / len(required)
+    return fill_rate * _mean_entity_confidence(state, restrict_to=contributing)
 
 
 def _mean_entity_confidence(

@@ -27,10 +27,11 @@ from typing import Any, Protocol
 
 from app.core.logging import get_logger
 from app.domain.entities import ConversationState
-from app.domain.enums import EntityType, IntentCategory
+from app.domain.enums import EntityType
 from app.domain.policies import intent_policy
 from app.domain.ports import LLMResponse
 from app.domain.value_objects import DraftReply, LanguageProfile, Plan, TokenUsage
+from app.services.execution.labels import intent_label
 from app.services.execution.runtime import describe_vehicle
 
 logger = get_logger(__name__)
@@ -62,6 +63,10 @@ price, year, horsepower, mileage or date that does not already appear there. \
 If no vehicle line is supplied, mention no vehicle and no specification at all.
 - If other open requests are listed, you may note in one short clause that you \
 will come back to them. Do not attempt to answer them.
+- Read "Conversation so far" before you write. If you already asked for this \
+and the customer replied with something else, never repeat yourself word for \
+word — name what you did take from their message, then ask again in different \
+words. An identical question twice reads as not having listened.
 - Warm, brief and specific. Two sentences at most. Never write "Thank you for \
 reaching out" and never sign off — you are already in a conversation.
 
@@ -292,28 +297,6 @@ def _text_or_none(value: Any) -> str | None:
     return str(value) if value else None
 
 
-_INTENT_LABELS: dict[IntentCategory, str] = {
-    IntentCategory.TEST_DRIVE_BOOKING: "the test drive",
-    IntentCategory.FINANCING_EMI: "financing",
-    IntentCategory.TRADE_IN_VALUATION: "the trade-in",
-    IntentCategory.VEHICLE_AVAILABILITY_INFO: "availability",
-    IntentCategory.PRICING_OFFERS: "pricing",
-    IntentCategory.SERVICE_AFTERSALES: "service",
-    IntentCategory.COMPLAINT_ESCALATION: "the complaint",
-    IntentCategory.GENERAL_INFO: "the general enquiry",
-}
-
-
-def _label(category: IntentCategory) -> str:
-    """A phrase a customer would recognise.
-
-    The raw enum value leaks otherwise. A smaller model handed
-    "financing_emi" writes "financing EMI" straight into the reply, which is
-    internal vocabulary appearing in front of a customer.
-    """
-    return _INTENT_LABELS.get(category, category.value.replace("_", " "))
-
-
 def _build_context(
     *,
     template_en: str,
@@ -348,7 +331,7 @@ def _build_context(
         if not remaining:
             continue
         needs = ", ".join(s.value.replace("_", " ") for s in remaining)
-        others.append(f"- {_label(intent.category)} — still need: {needs}")
+        others.append(f"- {intent_label(intent.category)} — still need: {needs}")
 
     if others:
         lines += ["\n## Other open requests you may acknowledge briefly", *others]

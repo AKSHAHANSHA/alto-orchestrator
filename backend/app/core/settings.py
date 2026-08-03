@@ -68,6 +68,18 @@ class Settings(BaseSettings):
     llm_provider: ProviderName = ProviderName.MOCK
 
     openai_api_key: str = ""
+    # gpt-4o-mini was trialled on 2026-08-03 and reverted. It is 3.5-6x
+    # faster and finds multi-intent messages *better* — but it files a
+    # one-word answer into the wrong slot: asked "which brand?", a reply of
+    # "Renzo" was extracted as `old_vehicle_brand` (the trade-in) rather
+    # than `new_vehicle_brand`, 3/3 runs. The conversation then loops on
+    # that question forever and the trade-in record is corrupted. gpt-5-mini
+    # routes the same reply correctly 3/3.
+    #
+    # This is a prompt gap rather than a verdict on the model:
+    # `_wrap_with_context` names the slot that was asked for, but
+    # `ENTITY_SYSTEM`'s old-vs-new rules only cover a full sentence naming
+    # two vehicles. Fix that and the speed is available again.
     openai_fast_model: str = "gpt-5-mini"
     openai_premium_model: str = "gpt-4o"
 

@@ -266,3 +266,78 @@ class TestTheMixedIntentScenario:
         queue = IntentQueue().merge((intent(IntentCategory.TEST_DRIVE_BOOKING),))
         assert len(queue) == 1
         assert queue.primary is not None
+
+
+class TestTheReducerAcrossTurns:
+    """The reducer is where the guarantee lives — including on the turn seed.
+
+    `IntentQueue.merge` was always correct. The loss happened one level up:
+    `initial_state()` seeds an empty `IntentQueue`, LangGraph folds that seed
+    into the checkpointed state on every turn after the first, and the
+    reducer honoured it as "the new truth". Three intents became one the
+    moment the customer answered a follow-up question.
+    """
+
+    def test_the_turn_seed_does_not_wipe_the_queue(self) -> None:
+        from app.graph.state import initial_state, merge_intents
+
+        accumulated = IntentQueue(
+            intents=(
+                intent(IntentCategory.TEST_DRIVE_BOOKING),
+                intent(IntentCategory.TRADE_IN_VALUATION),
+                intent(IntentCategory.FINANCING_EMI),
+            )
+        )
+        seed = initial_state(
+            conversation_id="c",
+            inquiry_id="i",
+            trace_id="t",
+            raw_text="Renzo",
+            channel="web_form",
+        )
+
+        merged = merge_intents(accumulated, seed["intents"])
+
+        assert {i.category for i in merged.unresolved} == {
+            IntentCategory.TEST_DRIVE_BOOKING,
+            IntentCategory.TRADE_IN_VALUATION,
+            IntentCategory.FINANCING_EMI,
+        }
+
+    def test_the_planner_can_still_replace_the_queue(self) -> None:
+        # The authoritative-replace path exists so `enrich` and
+        # `recompute_missing_slots` can rewrite policy-owned fields without
+        # being merge-folded back into stale values. Guarding the empty case
+        # must not cost that.
+        from app.graph.state import merge_intents
+
+        before = IntentQueue(intents=(intent(IntentCategory.TEST_DRIVE_BOOKING),))
+        after = IntentQueue(
+            intents=(
+                intent(IntentCategory.TEST_DRIVE_BOOKING, priority=80).model_copy(
+                    update={"department": Department.SALES}
+                ),
+            )
+        )
+
+        merged = merge_intents(before, after)
+        assert merged.intents[0].priority == 80
+        assert merged.intents[0].department is Department.SALES
+
+    def test_an_empty_queue_is_kept_when_there_is_nothing_to_protect(self) -> None:
+        from app.graph.state import merge_intents
+
+        assert merge_intents(IntentQueue(), IntentQueue()).intents == ()
+
+    def test_newly_discovered_intents_still_fold_in(self) -> None:
+        # Guarding the empty case must not block the normal path: a tuple of
+        # freshly discovered intents merges by category as before.
+        from app.graph.state import merge_intents
+
+        existing = IntentQueue(intents=(intent(IntentCategory.TEST_DRIVE_BOOKING),))
+        merged = merge_intents(existing, (intent(IntentCategory.FINANCING_EMI),))
+
+        assert {i.category for i in merged.unresolved} == {
+            IntentCategory.TEST_DRIVE_BOOKING,
+            IntentCategory.FINANCING_EMI,
+        }

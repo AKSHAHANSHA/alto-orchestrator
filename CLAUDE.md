@@ -29,10 +29,16 @@ routing, hybrid retrieval, structured memory and explainability.
   (deterministic, keyless). All behind one `LLMProvider` port. Note:
   gpt-5-mini rejects any non-default `temperature` (400 error) — the
   OpenAI adapter detects `gpt-5*` models and omits the param for them.
-  gpt-5-mini also runs noticeably slower (8-22s per fast-tier call vs
-  gpt-4o-mini's low single digits) and produces high completion-token
-  counts on simple extraction tasks, consistent with reasoning-model
-  behavior. See `completed_work.md` 2026-08-01 for measured numbers.
+  gpt-5-mini is slow (8–22s per fast-tier call, some of it OpenAI-side
+  retry/rate-limiting) and produces high completion-token counts on simple
+  extraction, consistent with reasoning-model behaviour.
+- **gpt-4o-mini was trialled and reverted on 2026-08-03.** It is 3.5–6x
+  faster and better at multi-intent discovery, but files a one-word slot
+  answer into the wrong slot — "Renzo" answering "which brand?" became
+  `old_vehicle_brand` instead of `new_vehicle_brand`, 3/3 runs, looping the
+  conversation and corrupting the trade-in. This is a prompt gap in
+  `ENTITY_SYSTEM`, not a settled verdict on the model: fixing it makes the
+  speed available again. See `completed_work.md` 2026-08-03.
 - **Retrieval**: Qdrant hybrid RRF (dense multilingual +
   BM25 sparse with IDF modifier) plus cross-encoder rerank
   (English-only — Arabic queries preserve RRF order).
