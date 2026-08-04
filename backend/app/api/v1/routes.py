@@ -63,6 +63,13 @@ HOLDING_MESSAGE_EN = (
 )
 HOLDING_MESSAGE_AR = "شكراً — أراجع هذا مع أحد الزملاء وسأعود إليك قريباً."
 
+# No "Perfect —" here. It was congratulating the customer for something they
+# had not done yet, and when it followed a question it read as a reply to an
+# answer nobody had given.
+CALENDAR_CALL_TO_ACTION = (
+    "Pick a 2-hour slot for your test drive using the calendar below."
+)
+
 
 def _container(request: Request) -> Any:
     return request.app.state.container
@@ -144,6 +151,10 @@ async def submit_inquiry(payload: InquiryRequest, request: Request) -> InquiryRe
 
     response = _to_response(result, conversation_id, trace_id)
 
+    # Decided once, up front, because both branches below need it and the
+    # escalated branch used to return before ever asking.
+    booking_ready = _should_show_calendar(result)
+
     # An escalated draft belongs to the reviewer, not the customer. It used to
     # be returned anyway and never written to the transcript, so the customer
     # read a full answer that vanished the moment they navigated away — the
@@ -151,25 +162,42 @@ async def submit_inquiry(payload: InquiryRequest, request: Request) -> InquiryRe
     # it is persisted like any other turn so it survives a reload. The draft
     # itself still reaches the operator through the review queue.
     if result.get("escalated"):
+        # The picker survives the escalation. Slots come from the appointments
+        # service, not from the model, so a sentence the reviewer still has to
+        # check says nothing about whether the customer may choose a time.
+        # This return sat above the calendar block, which meant one unsupported
+        # figure anywhere in the prose silently ended the booking flow: the
+        # customer asked to book a test drive, was told a colleague would come
+        # back to them, and never saw a calendar again.
+        holding_en = (
+            f"{HOLDING_MESSAGE_EN}\n\n{CALENDAR_CALL_TO_ACTION}"
+            if booking_ready
+            else HOLDING_MESSAGE_EN
+        )
         response = response.model_copy(
             update={
+                "awaiting": "test_drive_slot" if booking_ready else response.awaiting,
                 "reply": ReplyDTO(
-                    en=HOLDING_MESSAGE_EN,
+                    en=holding_en,
                     ar=HOLDING_MESSAGE_AR if draft and draft.is_bilingual else None,
                     is_bilingual=bool(draft and draft.is_bilingual),
                     requires_human_approval=True,
-                )
+                ),
             }
         )
         await container.memory.append_turn(
             conversation_id, "assistant", HOLDING_MESSAGE_EN
         )
+        if booking_ready:
+            await container.memory.append_turn(
+                conversation_id, "assistant", CALENDAR_CALL_TO_ACTION
+            )
         return response
 
     # Detect a booking-ready state and replace the reply with a call to
     # show the calendar. The customer picks a slot inline instead of the
     # assistant asking for a date and time in words.
-    if _should_show_calendar(result):
+    if booking_ready:
         # Carry the graph's own reply through instead of discarding it. It
         # holds the vehicle's availability and specs and whatever other open
         # requests are still outstanding; replacing it outright meant a
@@ -179,12 +207,7 @@ async def submit_inquiry(payload: InquiryRequest, request: Request) -> InquiryRe
             if draft is not None and not result.get("escalated")
             else ""
         )
-        # No "Perfect —" here. It was congratulating the customer for
-        # something they had not done yet, and when it followed a question it
-        # read as a reply to an answer nobody had given.
-        call_to_action = (
-            "Pick a 2-hour slot for your test drive using the calendar below."
-        )
+        call_to_action = CALENDAR_CALL_TO_ACTION
         response = response.model_copy(
             update={
                 "awaiting": "test_drive_slot",
@@ -214,6 +237,9 @@ async def submit_inquiry(payload: InquiryRequest, request: Request) -> InquiryRe
 # question.
 _CALENDAR_SLOTS = {EntityType.PREFERRED_DATE.value, EntityType.PREFERRED_TIME.value}
 
+# What `escalate_human` writes to `awaiting` on its way out of the graph.
+_ESCALATED_AWAITING = "human_review"
+
 
 def _should_show_calendar(result: dict[str, Any]) -> bool:
     """Whether the customer is ready to pick a slot.
@@ -229,6 +255,16 @@ def _should_show_calendar(result: dict[str, Any]) -> bool:
     # one reply — and overwrote the slot the next turn needed to interpret.
     # `None` is the ready-to-act case: nothing is outstanding at all.
     awaiting = result.get("awaiting")
+
+    # `escalate_human` stamps "human_review" over whatever the turn was
+    # actually waiting for. That records who owns the *reply*, not what the
+    # customer still has to tell us — so it must not be read as "this turn is
+    # about something other than the booking". Without this the branch above
+    # rejected every escalated turn and the picker stayed hidden even after
+    # the caller was taught to ask for it.
+    if awaiting == _ESCALATED_AWAITING and result.get("escalated"):
+        awaiting = None
+
     if awaiting is not None and awaiting not in _CALENDAR_SLOTS:
         return False
 

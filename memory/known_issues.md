@@ -239,3 +239,29 @@ Run it before adopting any fast-tier model. It is three turns and catches
 what an aggregate escalation-rate metric cannot — those turns route to
 `clarify`, so confidence reads `None` and a harness scores the loop as "no
 failure".
+
+### An escalation used to silently cancel the test-drive booking — fixed
+`submit_inquiry` returned inside its escalation branch *before* the
+`_should_show_calendar` block below it, so any escalation reason removed the
+picker as collateral damage. Reported symptom: a customer asked to test-drive
+a Renzo S5, answered "which model?" and "which day?", and got "a colleague
+will come back to you" with no calendar — on that turn or any turn after.
+
+Two things had to change. The caller now decides `booking_ready` before the
+escalation branch and re-attaches the picker to the holding message. And
+`_should_show_calendar` ignores the `awaiting = "human_review"` that
+`escalate_human` stamps over the slot the turn was really waiting on — read
+literally, that value made every escalated turn look like it was about
+something other than the booking.
+
+The escalation itself was probably correct: `unsupported_financial_claim` on
+a drafted vehicle price with no catalog chunk retrieved. Reproduced with a
+policy-docs-only chunk set — `MONEY_PATTERN` ignores clock times ("14:00")
+but flags specs and prices ("400 hp", "AED 210,000"). **Do not exempt
+non-financial intents from the numeric grounding rule to stop this**; that
+would let an invented price reach a customer, which is the exact thing the
+rule exists to catch. Booking is deterministic and belongs to the
+appointments service, so it should survive a bad sentence in the prose.
+
+Pinned by `tests/unit/test_calendar_gate.py`, which drives the real handler —
+the gate can be perfectly correct and still never be asked.
