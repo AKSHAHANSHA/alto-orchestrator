@@ -216,3 +216,58 @@ class TestSelfReferentialHedges:
             {},
         )
         assert not report.passes
+
+
+class TestPolitenessCannotLaunderAFigure:
+    """A number does not stop being a claim because the sentence is polite.
+
+    `_is_boilerplate` runs before the numeric branch, so a sentence it skips
+    is never figure-checked. Every marker in the tuple is one a model reaches
+    for when it is being careful about a number, which is exactly when the
+    number matters most.
+    """
+
+    def test_the_same_figure_is_judged_the_same_either_way(self) -> None:
+        hedged = validate_grounding("Please note the down payment is 10,620 AED.", (), {})
+        plain = validate_grounding("The down payment is 10,620 AED.", (), {})
+        assert hedged.verdict is plain.verdict is GroundingVerdict.UNGROUNDED
+        assert hedged.has_unsupported_numeric_claim
+        assert len(hedged.claims) == len(plain.claims) == 1
+
+    def test_every_courtesy_marker_is_covered(self) -> None:
+        # One per phrasing family, so a future edit to BOILERPLATE that drops
+        # the guard fails here rather than in production.
+        for sentence in (
+            "Please note the down payment is 10,620 AED.",
+            "Our team can arrange this for 3,500 AED.",
+            "Let me know if 2,400 AED per month works for you.",
+            "This is indicative: the instalment is 1,850 AED.",
+            "Thanks! The total comes to 7,900 AED.",
+        ):
+            report = validate_grounding(sentence, (), {})
+            assert report.has_unsupported_numeric_claim, sentence
+
+    def test_a_tool_sourced_figure_survives_the_guard(self) -> None:
+        # The guard must not punish correct replies. A real figure inside a
+        # hedge becomes a *supported* claim — it raises faithfulness, it does
+        # not lower it.
+        report = validate_grounding(
+            "Please note the down payment is 10,620 AED.",
+            (),
+            {"emi": {"down_payment": 10620.0}},
+        )
+        assert report.passes
+        assert len(report.claims) == 1
+        assert report.claims[0].is_supported
+
+    def test_courtesy_without_a_figure_is_still_skipped(self) -> None:
+        # The original behaviour has to survive: politeness that asserts no
+        # number stays exempt, or every sign-off becomes an escalation.
+        report = validate_grounding(
+            "Please note that the final offer is subject to a physical "
+            "inspection at our showroom. Thanks for your patience!",
+            (),
+            {},
+        )
+        assert report.claims == ()
+        assert report.passes

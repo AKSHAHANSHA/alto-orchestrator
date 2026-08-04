@@ -48,7 +48,34 @@ SELF_REFERENTIAL = (
 )
 
 
+def _carries_figure(sentence: str) -> bool:
+    """Whether the sentence quotes a figure a customer could act on.
+
+    The pivot for both exemptions below. Politeness and self-description are
+    only safe to skip while they assert no number — the moment one carries a
+    figure it is a claim like any other, however it is worded.
+    """
+    return bool(MONEY_PATTERN.search(sentence))
+
+
 def _is_boilerplate(sentence: str) -> bool:
+    """Courtesy and hedging, which assert nothing and cannot be unsupported.
+
+    The figure guard is not decoration. This runs *before* the numeric branch
+    in `validate_grounding`, so a sentence skipped here skips figure-checking
+    entirely — and every marker in the list is one an LLM reaches for when it
+    is being careful about a number:
+
+        "Please note the down payment is 10,620 AED."  -> grounded, 0 claims
+        "The down payment is 10,620 AED."              -> ungrounded, 1 claim
+
+    Same invented figure, opposite verdicts, decided by a politeness prefix.
+    Adding the guard costs nothing when the figure is real — a tool-sourced
+    number simply becomes a *supported* claim, raising faithfulness rather
+    than lowering it — and closes the hole when it is not.
+    """
+    if _carries_figure(sentence):
+        return False
     lowered = sentence.lower().strip()
     return len(lowered) < 15 or any(marker in lowered for marker in BOILERPLATE)
 
@@ -65,12 +92,11 @@ def _is_self_referential(sentence: str) -> bool:
     own. The result was an operator interrupted by the model's phrasing
     rather than by anything being wrong.
 
-    Carrying a figure disqualifies a sentence from this exemption. `_is_
-    boilerplate` is consulted *before* the numeric branch below, so anything
-    skipped here skips figure-checking entirely — and a hedge that quotes a
-    price is still a price that has to be traced.
+    Carrying a figure disqualifies a sentence from this exemption, for the
+    same reason it disqualifies boilerplate: a hedge that quotes a price is
+    still a price that has to be traced.
     """
-    if MONEY_PATTERN.search(sentence):
+    if _carries_figure(sentence):
         return False
     lowered = sentence.lower().strip()
     return any(marker in lowered for marker in SELF_REFERENTIAL)

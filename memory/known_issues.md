@@ -282,9 +282,8 @@ the model's phrasing, not by anything being wrong.
 Fixed with `SELF_REFERENTIAL` + `_is_self_referential` in `grounding.py`.
 **A sentence carrying a figure is excluded from the exemption**: `_is_
 boilerplate` is consulted *before* the numeric branch, so anything skipped
-there skips figure-checking entirely. Note the same hazard already exists for
-the original `BOILERPLATE` tuple ("please note the down payment is 10,620 AED"
-would be skipped today) — untouched, but worth closing.
+there skips figure-checking entirely. The same hazard on the original
+`BOILERPLATE` tuple was closed straight after — see below.
 
 Verified against both real queue drafts: the trade-in now passes; the
 three-intent chat still escalates at **0.75**, with the single surviving
@@ -294,3 +293,28 @@ failure being Saturday hours the model read off the weekday row (it said
 Also confirmed healthy and deliberately left alone: the numeric rule. Across
 nine probe turns only one fired, on "A major service for a Karva costs 2,200
 AED" — invented, no tool, no document. **Do not weaken it.**
+
+### Politeness could launder an invented figure — fixed
+`_is_boilerplate` runs *before* the numeric branch, so any sentence it skipped
+was never figure-checked. Every marker in `BOILERPLATE` is one a model reaches
+for when it is being careful about a number, which is precisely when the number
+matters:
+
+    "Please note the down payment is 10,620 AED."  -> grounded,   0 claims
+    "The down payment is 10,620 AED."              -> ungrounded, 1 claim
+
+Same invented figure, opposite verdicts, decided by a politeness prefix. Also
+reachable via "our team", "let me know", "indicative", "thanks", and the
+`len < 15` short-circuit.
+
+Fixed with `_carries_figure`, now guarding both `_is_boilerplate` and
+`_is_self_referential`. Costs nothing when the figure is real: a tool-sourced
+number becomes a *supported* claim, raising faithfulness rather than lowering
+it. Verified no regression on three real drafts — trade-in stays 1.00,
+the three-intent chat stays 0.75 (still escalating on the wrong Saturday
+hours), the delivery answer stays grounded at 0.83.
+
+Found by inspection, not by probing: four live probes designed to provoke it
+all escalated for *other* reasons first. The hole is real but only reachable
+when an invented figure lands inside a hedged sentence and nothing else in the
+draft fails — luck, not design, which is why it was worth closing blind.
