@@ -10,8 +10,8 @@
   }
 
   body {
-    @apply bg-paper text-ink font-sans text-body;
-    font-feature-settings: "kern" 1, "liga" 1, "tnum" 1;
+    @apply bg-canvas text-ink font-sans text-body;
+    font-feature-settings: "kern" 1, "liga" 1, "cv11" 1;
   }
 
   /* Arabic text is right-to-left and needs a face with proper Naskh forms.
@@ -23,34 +23,110 @@
   }
 
   ::selection {
-    @apply bg-ink text-paper;
+    @apply bg-brand/25 text-plum;
   }
 
+  /* Amber at 3px is the brief's own focus signal. Kept on :focus-visible only
+     so pointer users never see it and keyboard users always do. */
   :focus-visible {
-    outline: 2px solid theme("colors.renzo.DEFAULT");
-    outline-offset: 3px;
+    outline: 3px solid theme("colors.brand.DEFAULT");
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  /* Scrollbars inside cream panels look wrong in the browser default grey. */
+  .scroll-warm {
+    scrollbar-width: thin;
+    scrollbar-color: theme("colors.brand.edge") transparent;
+  }
+
+  .scroll-warm::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scroll-warm::-webkit-scrollbar-thumb {
+    background: theme("colors.brand.edge");
+    border-radius: 9999px;
+  }
+
+  .scroll-warm::-webkit-scrollbar-track {
+    background: transparent;
   }
 }
 
 @layer components {
   /* The 12-column field the whole page aligns to. Nothing sits outside it. */
   .grid-field {
-    @apply mx-auto grid w-full max-w-grid grid-cols-4 gap-x-5 px-6 md:grid-cols-12 md:px-10 lg:px-16;
+    @apply mx-auto grid w-full max-w-grid grid-cols-4 gap-x-5 px-5 md:grid-cols-12 md:px-10 lg:px-14;
   }
 
-  /* Small caps label, the Swiss workhorse for section marks and metadata. */
+  /* Section eyebrow. Small, wide-tracked, quiet — it marks the section
+     without competing with the heading under it. */
   .label {
-    @apply font-mono text-label uppercase tracking-[0.13em] text-ink-faint;
+    @apply text-micro font-bold uppercase text-brand-deep;
   }
 
-  .rule-top {
-    @apply border-t border-rule;
+  .label-muted {
+    @apply text-micro font-bold uppercase text-ink-faint;
   }
 
   /* Numeric data must align in columns; tabular figures are non-negotiable
-     for scores and money. */
+     for scores, latencies and money. */
   .tabular {
     font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Buttons ───────────────────────────────────────────────────────
+     Three roles, and only one of them is amber. `btn-primary` is the single
+     most important action on a screen; `btn-plum` carries navigation and
+     chrome actions; `btn-ghost` is everything else. */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-btn px-5 py-2.5
+           text-small font-semibold transition-all duration-200 ease-soft
+           disabled:pointer-events-none disabled:opacity-40;
+  }
+
+  .btn-primary {
+    @apply btn bg-brand text-white shadow-soft hover:bg-[#d97c00] hover:shadow-lift active:translate-y-px;
+  }
+
+  .btn-plum {
+    @apply btn bg-plum text-white hover:bg-plum-soft active:translate-y-px;
+  }
+
+  .btn-ghost {
+    @apply btn border border-rule bg-paper text-ink hover:border-plum/30 hover:bg-offset active:translate-y-px;
+  }
+
+  .btn-lg {
+    @apply px-7 py-3.5 text-body;
+  }
+
+  /* ── Surfaces ──────────────────────────────────────────────────────
+     `card` is the white workhorse. `card-warm` is the cream variant used
+     wherever LUMO itself is speaking. */
+  .card {
+    @apply rounded-3xl border border-rule bg-paper;
+  }
+
+  .card-warm {
+    @apply rounded-3xl border border-brand-edge bg-brand-soft;
+  }
+
+  .card-hover {
+    @apply transition-all duration-300 ease-soft hover:-translate-y-1 hover:border-brand/40 hover:shadow-lift;
+  }
+
+  /* Small status/meta pill. Colour comes from a modifier alongside it. */
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-micro font-bold uppercase;
+  }
+
+  .field {
+    @apply w-full rounded-2xl border border-rule bg-paper px-4 py-3 text-small text-ink
+           outline-none transition-colors duration-200 placeholder:text-ink-faint
+           focus:border-brand disabled:opacity-50;
   }
 }
 
@@ -70,6 +146,25 @@
     transform: none;
   }
 
+  /* The soft amber bloom behind hero art and the chat greeting. Cheap
+     (one radial gradient, no filter) and it does the whole job of making a
+     white page feel warm. */
+  .glow-brand {
+    background-image: radial-gradient(
+      60% 60% at 50% 40%,
+      rgba(238, 137, 0, 0.16) 0%,
+      rgba(238, 137, 0, 0) 70%
+    );
+  }
+
+  .glow-plum {
+    background-image: radial-gradient(
+      65% 65% at 50% 45%,
+      rgba(93, 55, 110, 0.22) 0%,
+      rgba(93, 55, 110, 0) 70%
+    );
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .reveal {
       opacity: 1;
@@ -79,6 +174,14 @@
 
     html {
       scroll-behavior: auto;
+    }
+
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
     }
   }
 }

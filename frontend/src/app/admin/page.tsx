@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
@@ -11,6 +10,8 @@ import {
   type ReviewItem,
   type TranscriptTurn,
 } from "@/lib/api";
+import { SiteHeader } from "@/components/SiteHeader";
+import { LumoMark } from "@/components/Lumo";
 
 /**
  * Operations view.
@@ -24,6 +25,10 @@ import {
  * Once a conversation is handed to a person, the operator can keep replying
  * from here without a new review item per turn — the graph steps aside and
  * the transcript is the shared channel.
+ *
+ * This is a working surface, not a marketing page, so the warm cream is used
+ * sparingly — it marks where LUMO is speaking and where the operator types,
+ * and everything else stays on white so the data reads first.
  */
 
 const REFRESH_MS = 4000;
@@ -70,58 +75,50 @@ export default function AdminPage() {
   }, [load]);
 
   return (
-    <div className="min-h-screen bg-paper">
-      <header className="sticky top-0 z-40 border-b border-rule bg-paper/95 backdrop-blur-sm">
-        <div className="grid-field h-16 items-center">
-          <Link
-            href="/"
-            className="col-span-2 flex items-center gap-3 md:col-span-4"
-          >
-            <span className="block h-3 w-3 bg-ink" aria-hidden />
-            <span className="text-caption font-medium">
-              Alto Motors · Operations
+    <div className="min-h-screen bg-canvas">
+      <SiteHeader
+        eyebrow="Operations"
+        links={[{ href: "/chat", label: "Customer view" }]}
+        right={
+          metrics && (
+            <span className="hidden items-center gap-2 rounded-full bg-plum-tint px-3 py-1.5 text-caption text-plum lg:inline-flex">
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  metrics.retrieval_enabled ? "bg-positive" : "bg-ink-faint"
+                }`}
+                aria-hidden
+              />
+              {metrics.provider} ·{" "}
+              {metrics.retrieval_enabled ? "retrieval on" : "retrieval off"}
             </span>
-          </Link>
-          <div className="col-span-2 flex items-center justify-end gap-6 md:col-span-8">
-            {metrics && (
-              <span className="hidden text-caption text-ink-faint sm:inline">
-                {metrics.provider} ·{" "}
-                {metrics.retrieval_enabled ? "retrieval on" : "retrieval off"}
-              </span>
-            )}
-            <Link
-              href="/chat"
-              className="text-caption text-ink-muted hover:text-ink"
-            >
-              Customer view
-            </Link>
-          </div>
-        </div>
-      </header>
+          )
+        }
+      />
 
-      <main className="grid-field py-12">
+      <main className="grid-field py-8 md:py-10">
         {error && (
-          <div className="col-span-4 mb-10 border-l-2 border-signal bg-offset px-5 py-4 md:col-span-12">
-            <p className="text-body text-signal">{error}</p>
+          <div className="col-span-4 mb-8 rounded-3xl border border-signal/25 bg-signal/[0.05] px-6 py-5 md:col-span-12">
+            <p className="text-small font-semibold text-signal">{error}</p>
             <p className="mt-1 text-caption text-ink-muted">
               The frontend is trying to reach{" "}
-              <code className="font-mono">{API_BASE}</code>. Is the backend
-              running there?
+              <code className="rounded bg-paper px-1.5 py-0.5 font-mono">
+                {API_BASE}
+              </code>
+              . Is the backend running there?
             </p>
           </div>
         )}
 
         {/* ── Headline numbers ─────────────────────────────────── */}
         <section className="col-span-4 md:col-span-12">
-          <h1 className="text-title font-semibold">Live operations</h1>
-          <dl className="mt-6 grid grid-cols-2 gap-px border-t border-ink bg-rule md:grid-cols-6">
+          <h1 className="text-headline font-semibold text-plum">
+            Live operations
+          </h1>
+          <dl className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
             {[
               ["Conversations", metrics?.conversations ?? "—"],
               ["Awaiting review", metrics?.open_reviews ?? "—"],
-              [
-                "Bookings",
-                appointments.length,
-              ],
+              ["Bookings", appointments.length],
               [
                 "Avg latency",
                 metrics ? `${metrics.avg_latency_ms.toFixed(0)} ms` : "—",
@@ -132,9 +129,9 @@ export default function AdminPage() {
                 metrics ? `$${metrics.total_cost_usd.toFixed(4)}` : "—",
               ],
             ].map(([label, value]) => (
-              <div key={label as string} className="bg-paper px-5 py-6">
-                <dt className="label">{label as string}</dt>
-                <dd className="tabular mt-2 text-title font-semibold">
+              <div key={label as string} className="card rounded-2xl px-5 py-5">
+                <dt className="label-muted">{label as string}</dt>
+                <dd className="tabular mt-2 text-title font-semibold text-plum">
                   {value as string | number}
                 </dd>
               </div>
@@ -143,20 +140,30 @@ export default function AdminPage() {
         </section>
 
         {/* ── Human queue ──────────────────────────────────────── */}
-        <section className="col-span-4 mt-16 md:col-span-8">
-          <div className="flex items-baseline justify-between border-b border-ink pb-3">
-            <h2 className="text-title font-semibold">Human queue</h2>
-            <span className="label">{queue.length} open</span>
+        <section className="col-span-4 mt-12 md:col-span-8">
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-title font-semibold text-plum">Human queue</h2>
+            <span
+              className={`chip ${
+                queue.length > 0
+                  ? "bg-brand-soft text-brand-deep"
+                  : "bg-plum-tint text-plum"
+              }`}
+            >
+              {queue.length} open
+            </span>
           </div>
 
           {queue.length === 0 ? (
-            <p className="py-10 text-body text-ink-faint">
-              Nothing waiting. Escalations appear here the moment a
-              conversation falls below the confidence threshold or trips a
-              hard override.
-            </p>
+            <div className="card mt-5 rounded-3xl px-6 py-12 text-center">
+              <p className="text-small text-ink-muted">
+                Nothing waiting. Escalations appear here the moment a
+                conversation falls below the confidence threshold or trips a
+                hard override.
+              </p>
+            </div>
           ) : (
-            <div className="mt-6 space-y-8">
+            <div className="mt-5 space-y-6">
               {queue.map((item) => (
                 <ReviewCard key={item.id} item={item} onDone={load} />
               ))}
@@ -165,27 +172,29 @@ export default function AdminPage() {
         </section>
 
         {/* ── Bookings + performance ───────────────────────────── */}
-        <section className="col-span-4 mt-16 md:col-span-4">
-          <h2 className="border-b border-ink pb-3 text-title font-semibold">
+        <section className="col-span-4 mt-12 md:col-span-4">
+          <h2 className="text-title font-semibold text-plum">
             Recent test-drive bookings
           </h2>
-          <div className="mt-px space-y-px bg-rule">
+          <div className="mt-5 space-y-2">
             {appointments.length === 0 ? (
-              <p className="bg-paper px-5 py-6 text-caption text-ink-faint">
+              <p className="card rounded-2xl px-5 py-6 text-caption text-ink-faint">
                 No test-drive bookings yet.
               </p>
             ) : (
               appointments.map((booking) => (
                 <article
                   key={booking.id}
-                  className="border-l-4 border-positive bg-positive/[0.07] px-5 py-4"
+                  className="rounded-2xl border border-positive/20 bg-positive/[0.06] px-5 py-4"
                 >
-                  <p className="label text-positive">Test drive booked</p>
-                  <p className="mt-1 text-body font-medium">{booking.vehicle}</p>
-                  <p className="mt-1 tabular font-mono text-caption text-ink-muted">
+                  <p className="label-muted !text-positive">Test drive booked</p>
+                  <p className="mt-1.5 text-small font-semibold text-plum">
+                    {booking.vehicle}
+                  </p>
+                  <p className="tabular mt-1 font-mono text-caption text-ink-muted">
                     {booking.slot_label}
                   </p>
-                  <p className="mt-1 font-mono text-caption text-ink-faint">
+                  <p className="mt-1 truncate font-mono text-caption text-ink-faint">
                     {booking.conversation_id.slice(0, 18)}…
                   </p>
                 </article>
@@ -193,23 +202,23 @@ export default function AdminPage() {
             )}
           </div>
 
-          <h2 className="mt-12 border-b border-ink pb-3 text-title font-semibold">
-            By layer
-          </h2>
-          <div className="mt-px space-y-px bg-rule">
+          <h2 className="mt-10 text-title font-semibold text-plum">By layer</h2>
+          <div className="card mt-5 divide-y divide-rule rounded-2xl">
             {(metrics?.by_layer ?? []).map((layer) => (
               <div
                 key={layer.layer}
-                className="flex items-baseline justify-between bg-paper px-5 py-3"
+                className="flex items-baseline justify-between px-5 py-3"
               >
-                <span className="text-caption capitalize">{layer.layer}</span>
+                <span className="text-caption capitalize text-ink">
+                  {layer.layer}
+                </span>
                 <span className="tabular font-mono text-caption text-ink-muted">
                   {layer.latency_ms.toFixed(0)} ms · {layer.calls}
                 </span>
               </div>
             ))}
             {!metrics?.by_layer.length && (
-              <p className="bg-paper px-5 py-6 text-caption text-ink-faint">
+              <p className="px-5 py-6 text-caption text-ink-faint">
                 No traffic yet.
               </p>
             )}
@@ -232,10 +241,10 @@ function isArabic(text: string): boolean {
 /**
  * One review card, presented as a full chat window.
  *
- * Left column: scrollable transcript with a fixed input at the bottom —
- * the operator scrolls up to see history, types at the bottom without
- * losing the input to a growing message list. Right column: confidence
- * bars, rationale, and the resolve/reassign actions.
+ * Scrollable transcript with a fixed input at the bottom — the operator
+ * scrolls up to see history, types at the bottom without losing the input to
+ * a growing message list. Confidence bars, rationale, and the
+ * resolve/reassign actions sit below the conversation so nothing crowds it.
  */
 function ReviewCard({ item, onDone }: { item: ReviewItem; onDone: () => void }) {
   const [replyText, setReplyText] = useState("");
@@ -294,13 +303,13 @@ function ReviewCard({ item, onDone }: { item: ReviewItem; onDone: () => void }) 
   }
 
   return (
-    <article className="border border-rule">
-      <header className="flex flex-wrap items-baseline justify-between gap-3 border-b border-rule bg-offset px-5 py-3">
-        <div>
-          <p className="text-body font-medium">
+    <article className="overflow-hidden rounded-panel border border-rule bg-paper shadow-soft">
+      <header className="flex flex-wrap items-center justify-between gap-3 bg-plum px-5 py-4">
+        <div className="min-w-0">
+          <p className="text-small font-semibold capitalize text-white">
             {item.reason.replace(/_/g, " ")}
           </p>
-          <p className="mt-1 font-mono text-caption text-ink-faint">
+          <p className="mt-1 truncate font-mono text-caption text-white/50">
             {item.conversation_id} · {item.department ?? "unassigned"}
           </p>
         </div>
@@ -308,47 +317,45 @@ function ReviewCard({ item, onDone }: { item: ReviewItem; onDone: () => void }) 
           <button
             type="button"
             onClick={() => setShowRouting((v) => !v)}
-            className="text-caption text-ink-muted hover:text-ink"
+            className="shrink-0 rounded-full border border-white/20 px-3 py-1.5 text-caption text-white/75 transition-colors hover:border-brand hover:text-brand"
           >
             {showRouting ? "Hide" : "Show"} routing
           </button>
         )}
       </header>
 
-      {/* ── Chat window: full width, scrollable transcript, pinned input */}
+      {/* ── Chat window: scrollable transcript, pinned input ────────── */}
       <div className="flex h-[440px] flex-col bg-paper">
         <div
           ref={transcriptRef}
-          className="flex-1 space-y-3 overflow-y-auto px-5 py-5"
+          className="scroll-warm flex-1 space-y-3 overflow-y-auto px-5 py-5"
         >
           <Transcript turns={item.transcript} />
         </div>
 
-        <div className="border-t border-rule bg-offset px-5 py-4">
+        <div className="border-t border-brand-edge bg-brand-soft px-5 py-4">
           {item.draft && (
             <details className="mb-3">
-              <summary className="label cursor-pointer">
+              <summary className="cursor-pointer text-caption font-semibold text-brand-deep">
                 Suggested draft
               </summary>
-              <p className="mt-2 text-caption text-ink-muted">
-                {item.draft.en}
-              </p>
+              <p className="mt-2 text-caption text-ink-warm">{item.draft.en}</p>
               {item.draft.ar && (
-                <p dir="rtl" className="mt-2 text-caption text-ink-muted">
+                <p dir="rtl" className="mt-2 text-caption text-ink-warm">
                   {item.draft.ar}
                 </p>
               )}
               <button
                 type="button"
                 onClick={() => setReplyText(item.draft?.en ?? "")}
-                className="mt-2 text-caption text-ink hover:underline"
+                className="mt-2 text-caption font-semibold text-brand-deep hover:underline"
               >
                 Use this draft
               </button>
             </details>
           )}
 
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2 rounded-2xl border border-brand-edge bg-paper p-1.5 pl-4 transition-colors focus-within:border-brand">
             <input
               value={replyText}
               onChange={(event) => setReplyText(event.target.value)}
@@ -361,30 +368,29 @@ function ReviewCard({ item, onDone }: { item: ReviewItem; onDone: () => void }) 
               placeholder="Type your reply to the customer…"
               dir={isArabic(replyText) ? "rtl" : "ltr"}
               disabled={busy}
-              className="flex-1 border border-rule px-4 py-2 text-body outline-none focus:border-ink disabled:opacity-50"
+              className="min-w-0 flex-1 bg-transparent py-2 text-small text-ink outline-none placeholder:text-ink-faint disabled:opacity-50"
             />
             <button
               type="button"
               onClick={() => void sendReply()}
               disabled={busy || !replyText.trim()}
-              className="bg-ink px-5 py-2 text-caption text-paper transition-opacity hover:opacity-85 disabled:opacity-30"
+              className="shrink-0 rounded-xl bg-brand px-4 py-2 text-caption font-semibold text-white transition-colors hover:bg-[#d97c00] disabled:pointer-events-none disabled:opacity-30"
             >
               Send
             </button>
           </div>
 
           {error && (
-            <p className="mt-3 border-l-2 border-signal bg-paper px-3 py-2 text-caption text-signal">
+            <p className="mt-3 rounded-xl border border-signal/25 bg-paper px-3 py-2 text-caption text-signal">
               {error}
             </p>
           )}
         </div>
       </div>
 
-      {/* ── Metadata: confidence, routing, and close actions, stacked
-             below the chat so nothing crowds the conversation ────────── */}
-      <div className="grid gap-px border-t border-rule bg-rule md:grid-cols-2">
-        <div className="bg-paper p-5">
+      {/* ── Metadata: confidence, routing, and close actions ────────── */}
+      <div className="grid divide-y divide-rule border-t border-rule md:grid-cols-2 md:divide-x md:divide-y-0">
+        <div className="p-5">
           {item.confidence ? (
             <ConfidenceBars confidence={item.confidence} />
           ) : (
@@ -398,21 +404,21 @@ function ReviewCard({ item, onDone }: { item: ReviewItem; onDone: () => void }) 
             </p>
           )}
           {showRouting && item.routing && (
-            <pre className="mt-4 overflow-x-auto border border-rule bg-offset p-3 font-mono text-[11px] leading-relaxed text-ink-muted">
+            <pre className="mt-4 overflow-x-auto rounded-xl border border-rule bg-offset p-3 font-mono text-[11px] leading-relaxed text-ink-muted">
               {JSON.stringify(item.routing, null, 2)}
             </pre>
           )}
         </div>
 
-        <div className="bg-paper p-5">
-          <p className="label mb-3">Close or reassign</p>
+        <div className="p-5">
+          <p className="label-muted mb-3">Close or reassign</p>
           <div className="space-y-2">
             {item.is_open && item.draft && (
               <button
                 type="button"
                 onClick={() => resolve("approved")}
                 disabled={busy}
-                className="w-full bg-ink px-4 py-2 text-caption text-paper transition-opacity hover:opacity-85 disabled:opacity-30"
+                className="btn-primary w-full"
               >
                 Approve draft &amp; send
               </button>
@@ -421,7 +427,7 @@ function ReviewCard({ item, onDone }: { item: ReviewItem; onDone: () => void }) 
               type="button"
               onClick={() => resolve("rejected")}
               disabled={busy}
-              className="w-full border border-rule px-4 py-2 text-caption text-ink-muted transition-colors hover:border-ink hover:text-ink disabled:opacity-30"
+              className="btn-ghost w-full"
             >
               Dismiss without sending
             </button>
@@ -432,7 +438,7 @@ function ReviewCard({ item, onDone }: { item: ReviewItem; onDone: () => void }) 
               value={reassignTo}
               onChange={(event) => setReassignTo(event.target.value)}
               disabled={busy}
-              className="flex-1 border border-rule bg-paper px-3 py-2 text-caption"
+              className="field flex-1 py-2.5 text-caption"
             >
               <option value="">Hand to another team…</option>
               {DEPARTMENTS.map((d) => (
@@ -445,7 +451,7 @@ function ReviewCard({ item, onDone }: { item: ReviewItem; onDone: () => void }) 
               type="button"
               onClick={() => resolve("reassigned", { reassignTo })}
               disabled={busy || !reassignTo}
-              className="border border-ink px-4 py-2 text-caption text-ink transition-colors hover:bg-ink hover:text-paper disabled:opacity-30"
+              className="btn-plum shrink-0"
             >
               Reassign
             </button>
@@ -465,7 +471,7 @@ function ReviewCard({ item, onDone }: { item: ReviewItem; onDone: () => void }) 
 function Transcript({ turns }: { turns: TranscriptTurn[] }) {
   if (turns.length === 0) {
     return (
-      <p className="text-caption text-ink-faint italic">
+      <p className="text-caption italic text-ink-faint">
         No transcript recorded for this conversation.
       </p>
     );
@@ -480,7 +486,7 @@ function Transcript({ turns }: { turns: TranscriptTurn[] }) {
             <div key={index} className="flex justify-end">
               <p
                 dir={rtl ? "rtl" : "ltr"}
-                className="max-w-[85%] bg-offset px-4 py-2 text-body"
+                className="max-w-[85%] rounded-2xl rounded-br-md bg-plum px-4 py-2.5 text-small text-white"
               >
                 {turn.text}
               </p>
@@ -491,17 +497,18 @@ function Transcript({ turns }: { turns: TranscriptTurn[] }) {
           return (
             <p
               key={index}
-              className="text-center text-caption text-ink-faint italic"
+              className="text-center text-caption italic text-ink-faint"
             >
               {turn.text}
             </p>
           );
         }
         return (
-          <div key={index} className="flex">
+          <div key={index} className="flex gap-2">
+            <LumoMark size={24} className="mt-1 shrink-0" />
             <p
               dir={rtl ? "rtl" : "ltr"}
-              className="max-w-[85%] border-l-2 border-ink pl-3 text-body"
+              className="max-w-[85%] rounded-2xl rounded-tl-md border border-brand-edge bg-brand-soft px-4 py-2.5 text-small text-ink"
             >
               {turn.text}
             </p>
@@ -531,27 +538,29 @@ function ConfidenceBars({ confidence }: { confidence: Confidence }) {
   return (
     <div>
       <div className="mb-3 flex items-baseline justify-between">
-        <span className="label">Confidence</span>
-        <span className="tabular font-mono text-caption">
+        <span className="label-muted">Confidence</span>
+        <span className="tabular font-mono text-caption text-plum">
           {confidence.decision_score.toFixed(0)} / 100
         </span>
       </div>
 
-      <div className="space-y-1.5">
+      <div className="space-y-2">
         {signals.map(([name, value]) => {
           const weakest = name === confidence.weakest_signal;
           return (
             <div key={name} className="flex items-center gap-3">
               <span
                 className={`w-16 shrink-0 text-[11px] ${
-                  weakest ? "font-medium text-signal" : "text-ink-faint"
+                  weakest ? "font-semibold text-signal" : "text-ink-faint"
                 }`}
               >
                 {name}
               </span>
-              <div className="h-1 flex-1 bg-rule">
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-rule">
                 <div
-                  className={`h-full ${weakest ? "bg-signal" : "bg-ink"}`}
+                  className={`h-full rounded-full transition-all duration-500 ease-soft ${
+                    weakest ? "bg-signal" : "bg-brand"
+                  }`}
                   style={{ width: `${Math.max(2, value * 100)}%` }}
                 />
               </div>
