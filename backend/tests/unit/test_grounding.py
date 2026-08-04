@@ -8,6 +8,8 @@ false alarms is how a review queue stops being read.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from app.domain.enums import GroundingVerdict
 from app.services.execution.grounding import vacuously_grounded, validate_grounding
 
@@ -132,3 +134,85 @@ class TestFigureNormalisation:
             "The annual rate is 4.99%.", (), {"emi": {"annual_rate": 4.99}}
         )
         assert report.passes
+
+
+class TestSelfReferentialHedges:
+    """A sentence about the assistant's own reasoning is not a claim.
+
+    Measured against the live service. "What is my 2015 Karva 4Runner worth
+    as a trade-in?" asked three times returned faithfulness 0.50, 1.00 and
+    1.00 — same tool, same figures, same correctness. The only difference was
+    whether the model appended its hedge. An escalation that depends on the
+    model's phrasing rather than on anything being wrong is noise, and noise
+    is what stops a review queue being read.
+    """
+
+    TRADE_IN_DRAFT = (
+        "Your 2015 Karva 4Runner is estimated to be worth between 8,000 AED "
+        "and 9,500 AED as a trade-in, with a point estimate of 8,500 AED. "
+        "This is based on the vehicle details you provided, assuming average "
+        "usage for its age. Please note that the final offer is subject to a "
+        "physical inspection at our showroom."
+    )
+
+    # The model designation carries a digit — "4Runner" cites the figure 4 —
+    # so the valuation record has to travel with the vehicle it valued, the
+    # same way the catalog test above does. Real tool results return the whole
+    # record, which is why the live turn reported no unsupported figure.
+    TOOL_RESULTS: ClassVar[dict[str, dict[str, object]]] = {
+        "valuation": {
+            "brand": "Karva",
+            "model": "4Runner",
+            "year": 2015,
+            "low": 8000.0,
+            "high": 9500.0,
+            "point": 8500.0,
+        }
+    }
+
+    def test_the_real_escalated_draft_now_passes(self) -> None:
+        # Verbatim from the operator queue, reason `grounding_failed`.
+        report = validate_grounding(self.TRADE_IN_DRAFT, (), self.TOOL_RESULTS)
+        assert report.passes
+        # One scored claim survives: the numeric one, sourced from the tool.
+        assert len(report.claims) == 1
+        assert report.claims[0].is_numeric
+
+    def test_a_hedge_carrying_a_figure_is_still_checked(self) -> None:
+        # The exemption must not become an escape hatch. `_is_boilerplate` is
+        # consulted before the numeric branch, so a sentence skipped here
+        # skips figure-checking too.
+        report = validate_grounding(
+            "This is based on the vehicle details you provided and comes to "
+            "12,750 AED.",
+            (),
+            {},
+        )
+        assert not report.passes
+        assert report.has_unsupported_numeric_claim
+
+    def test_an_unsourced_service_price_still_escalates(self) -> None:
+        # Also verbatim from the queue, reason `unsupported_financial_claim`.
+        # No tool produced this and no document contains it.
+        report = validate_grounding(
+            "A major service for a Karva costs 2,200 AED. If you have any "
+            "other questions or need to schedule a service, feel free to let "
+            "me know!",
+            (),
+            {},
+        )
+        assert not report.passes
+        assert report.has_unsupported_numeric_claim
+
+    def test_a_wrong_fact_beside_a_hedge_is_still_caught(self) -> None:
+        # The three-intent chat escalated on two unsupported sentences: the
+        # hedge, and Saturday hours the model read off the weekday row. The
+        # hedge should stop counting; the wrong hours must not.
+        report = validate_grounding(
+            "This is based on the details you've provided and assumes average "
+            "usage. Our showroom is open on Saturdays from 09:00 to 21:00, so "
+            "you can visit us then for the test drive.",
+            (),
+            {},
+        )
+        assert not report.passes

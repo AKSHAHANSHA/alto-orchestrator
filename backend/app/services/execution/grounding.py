@@ -34,10 +34,46 @@ BOILERPLATE = (
     "subject to", "please note", "indicative", "not a finance offer",
 )
 
+# Sentences describing how the answer was reached rather than what is true of
+# the world. They are unsupportable by construction — no policy document
+# describes this assistant's own reasoning — so the corpus-overlap test can
+# only ever score them zero.
+SELF_REFERENTIAL = (
+    "this is based on",
+    "based on the details you",
+    "based on the vehicle details",
+    "based on the information you",
+    "assuming average usage",
+    "assumes average usage",
+)
+
 
 def _is_boilerplate(sentence: str) -> bool:
     lowered = sentence.lower().strip()
     return len(lowered) < 15 or any(marker in lowered for marker in BOILERPLATE)
+
+
+def _is_self_referential(sentence: str) -> bool:
+    """Whether a sentence only explains the estimate rather than asserting it.
+
+    Measured, not guessed. Asking "what is my 2015 Karva 4Runner worth?" three
+    times produced faithfulness 0.50, 1.00 and 1.00 — identical figures from
+    identical tools, differing only in whether the model appended "This is
+    based on the vehicle details you provided, assuming average usage for its
+    age." That hedge cannot overlap any document, and in a three-sentence
+    reply where one line is already boilerplate it halves the score on its
+    own. The result was an operator interrupted by the model's phrasing
+    rather than by anything being wrong.
+
+    Carrying a figure disqualifies a sentence from this exemption. `_is_
+    boilerplate` is consulted *before* the numeric branch below, so anything
+    skipped here skips figure-checking entirely — and a hedge that quotes a
+    price is still a price that has to be traced.
+    """
+    if MONEY_PATTERN.search(sentence):
+        return False
+    lowered = sentence.lower().strip()
+    return any(marker in lowered for marker in SELF_REFERENTIAL)
 
 
 def _is_question(sentence: str) -> bool:
@@ -132,7 +168,11 @@ def validate_grounding(
     claims: list[Claim] = []
 
     for sentence in sentences:
-        if _is_boilerplate(sentence) or _is_question(sentence):
+        if (
+            _is_boilerplate(sentence)
+            or _is_question(sentence)
+            or _is_self_referential(sentence)
+        ):
             continue
 
         is_numeric = bool(MONEY_PATTERN.search(sentence))

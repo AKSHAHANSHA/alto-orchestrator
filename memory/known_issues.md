@@ -265,3 +265,32 @@ appointments service, so it should survive a bad sentence in the prose.
 
 Pinned by `tests/unit/test_calendar_gate.py`, which drives the real handler —
 the gate can be perfectly correct and still never be asked.
+
+### Self-referential hedges were escalating correct replies — fixed
+`grounding_failed` was firing on drafts where every figure was right. Measured
+against the live service: "What is my 2015 Karva 4Runner worth as a trade-in?"
+asked three times returned faithfulness **0.50, 1.00, 1.00** — identical tools,
+identical figures. The only variable was whether the model appended "This is
+based on the vehicle details you provided, assuming average usage for its age."
+
+That hedge describes the assistant's own reasoning, so no policy document can
+overlap it and the corpus test can only score it zero. In a three-sentence
+reply where one line is already boilerplate, the denominator is 2 — one miss
+costs 50 points and the 0.8 bar becomes unreachable. Escalation was decided by
+the model's phrasing, not by anything being wrong.
+
+Fixed with `SELF_REFERENTIAL` + `_is_self_referential` in `grounding.py`.
+**A sentence carrying a figure is excluded from the exemption**: `_is_
+boilerplate` is consulted *before* the numeric branch, so anything skipped
+there skips figure-checking entirely. Note the same hazard already exists for
+the original `BOILERPLATE` tuple ("please note the down payment is 10,620 AED"
+would be skipped today) — untouched, but worth closing.
+
+Verified against both real queue drafts: the trade-in now passes; the
+three-intent chat still escalates at **0.75**, with the single surviving
+failure being Saturday hours the model read off the weekday row (it said
+09:00–21:00; the corpus says 10:00–22:00). Noise removed, real catch kept.
+
+Also confirmed healthy and deliberately left alone: the numeric rule. Across
+nine probe turns only one fired, on "A major service for a Karva costs 2,200
+AED" — invented, no tool, no document. **Do not weaken it.**
