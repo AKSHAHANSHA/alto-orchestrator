@@ -44,6 +44,10 @@ class VehicleCatalogService:
         self._path = csv_path
         self._records: list[VehicleRecord] = []
         self._by_brand_model: dict[tuple[str, str], list[VehicleRecord]] = defaultdict(list)
+        # Which brands sell a given model. Built for the reverse question —
+        # "the customer said S5, whose is that?" — which the brand/model index
+        # above cannot answer without a brand to key on.
+        self._brands_by_model: dict[str, set[str]] = defaultdict(set)
         self._load()
 
     def _load(self) -> None:
@@ -77,6 +81,7 @@ class VehicleCatalogService:
                 )
                 self._records.append(record)
                 self._by_brand_model[(brand.lower(), model.lower())].append(record)
+                self._brands_by_model[model.lower()].add(brand)
 
         logger.info(
             "catalog_loaded",
@@ -87,6 +92,37 @@ class VehicleCatalogService:
     @property
     def size(self) -> int:
         return len(self._records)
+
+    @property
+    def brands(self) -> frozenset[str]:
+        """Every brand actually stocked. Read from the data, never hardcoded."""
+        return frozenset(self._brands_by_model_brands())
+
+    def _brands_by_model_brands(self) -> set[str]:
+        return {brand for brands in self._brands_by_model.values() for brand in brands}
+
+    def is_known_model(self, model: str) -> bool:
+        return model.strip().lower() in self._brands_by_model
+
+    def brand_for_model(self, model: str) -> str | None:
+        """The one brand that sells this model, or None if that is not unique.
+
+        Exists for the customer who knows the car but not the badge. Asked
+        "Karva or Renzo?", plenty of people answer "S5" — it is the name on
+        the boot lid, and the brand may be something they have never had a
+        reason to notice. Refusing that answer sends them back to the one
+        question they cannot answer.
+
+        `None` covers two different situations and the caller must not
+        conflate them: a model this catalog has never heard of, and a model
+        both brands sell. Only four of 914 models are ambiguous — 200,
+        Cabriolet, Continental and Coupe — so this resolves the overwhelming
+        majority outright, and `is_known_model` separates the two cases.
+        """
+        brands = self._brands_by_model.get(model.strip().lower())
+        if brands is None or len(brands) != 1:
+            return None
+        return next(iter(brands))
 
     async def find(
         self,

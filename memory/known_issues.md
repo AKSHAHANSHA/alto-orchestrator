@@ -318,3 +318,40 @@ Found by inspection, not by probing: four live probes designed to provoke it
 all escalated for *other* reasons first. The hole is real but only reachable
 when an invented figure lands inside a hedged sentence and nothing else in the
 draft fails — luck, not design, which is why it was worth closing blind.
+
+### A model name answered into the brand slot dead-ended the booking — fixed
+Asked "Karva or Renzo?", a customer who knows the car but not the badge says
+"S5". The extractor obeys the pending question and files it into
+`new_vehicle_brand` at 0.95 confidence. Nothing downstream recovers: "S5"
+matches no brand column, the vehicle never resolves, and the booking cannot
+complete.
+
+Measured live, four cooperative turns:
+
+| turn | said | extracted | replied |
+|---|---|---|---|
+| 1 | I want to book a test drive | — | which brand? |
+| 2 | S5 | `new_vehicle_brand='S5'` | which model? |
+| 3 | S5 | `new_vehicle_model='S5'` | which year/body? |
+| 4 | 2016 Coupe | year + body | **"which vehicle are you asking about?"** |
+
+No calendar. The customer who typed "Renzo S5" reached one in two turns.
+
+**Rejecting an out-of-domain brand was considered and rejected** — it returns
+the customer to the exact question they cannot answer, which is worse than
+accepting it. The fix resolves instead: `_resolve_model_named_as_brand` in
+`graph/nodes.py`, backed by `catalog.brand_for_model`. 910 of the catalog's
+914 models name their brand uniquely; the four that do not (200, Cabriolet,
+Continental, Coupe) are kept as the model with the brand left unanswered, so
+the follow-up question is asked for a real reason. Unrecognised values are
+left untouched — could be a typo or a marque not stocked.
+
+`_resolve_model_named_as_brand` is not the same failure as the mis-filed slot
+in the model table above: there the value went to the *wrong* slot, here it
+went to the *right* slot with an invalid value.
+
+Note: `catalog.brands` reads from the data, never hardcoded.
+
+Tested at both levels deliberately. The function tests alone still passed with
+the call site deleted — the same shape of gap that hid the calendar bug — so
+`TestTheNodeActuallyCallsIt` drives the real node.

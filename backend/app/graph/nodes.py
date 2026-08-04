@@ -20,11 +20,12 @@ from app.domain.entities import ConversationState, Span
 from app.domain.enums import (
     Channel,
     CognitiveLayer,
+    EntityType,
     IntentCategory,
     RoutingTier,
     SpanStatus,
 )
-from app.domain.value_objects import TokenUsage
+from app.domain.value_objects import ExtractedEntity, TokenUsage
 from app.graph.state import GraphState
 from app.services.decision import confidence as confidence_engine
 from app.services.decision.router import route
@@ -147,13 +148,16 @@ def build_nodes(deps: Any) -> dict[str, NodeFn]:
                 ]
             }
 
+        entities, resolved = _resolve_model_named_as_brand(entities, deps.catalog)
+
         return {
             "entities": entities,
             "spans": [
                 _span(state, "extract_entities", CognitiveLayer.UNDERSTANDING, started,
                       usage=usage, model=deps.router.model_for_fast(),
                       provider=deps.router.provider_name,
-                      slots=[e.type.value for e in entities])
+                      slots=[e.type.value for e in entities],
+                      brand_resolved_from_model=resolved)
             ],
         }
 
@@ -490,6 +494,75 @@ def build_nodes(deps: Any) -> dict[str, NodeFn]:
         "escalate_human": escalate_human,
         "persist_memory": persist_memory,
     }
+
+
+_BRAND_TO_MODEL_SLOT = {
+    EntityType.NEW_VEHICLE_BRAND: EntityType.NEW_VEHICLE_MODEL,
+    EntityType.OLD_VEHICLE_BRAND: EntityType.OLD_VEHICLE_MODEL,
+}
+
+
+def _resolve_model_named_as_brand(
+    entities: tuple[ExtractedEntity, ...], catalog: Any
+) -> tuple[tuple[ExtractedEntity, ...], str | None]:
+    """Repair a model name that was filed as the brand.
+
+    Asked "Karva or Renzo?", a customer who knows the car but not the badge
+    answers "S5". The extractor obeys the question it was told was pending and
+    files that into `new_vehicle_brand`, at high confidence. Nothing downstream
+    ever recovers: "S5" matches no brand column, so the vehicle never resolves
+    and the booking cannot complete. Observed live — four cooperative turns
+    ("S5", "S5", "2016 Coupe") ending in "which vehicle are you asking about?",
+    against two turns for a customer who happened to say "Renzo S5".
+
+    Rejecting the answer instead would be worse: it returns the customer to the
+    exact question they could not answer. So resolve it. The catalog knows S5
+    is a Renzo, and 910 of its 914 models name their brand uniquely.
+
+    Three outcomes:
+      · resolves to one brand  — fill both slots, and the naive customer is
+        now *ahead* of the one who spelled out brand and model
+      · known but ambiguous    — keep it as the model and leave the brand
+        empty, so the follow-up question is asked for a real reason
+      · unrecognised entirely  — leave untouched; it may be a typo, or a
+        brand this dealership genuinely does not stock
+    """
+    if not entities:
+        return entities, None
+
+    known_brands = {b.lower() for b in catalog.brands}
+    present = {entity.type for entity in entities}
+    repaired: list[ExtractedEntity] = []
+    resolved_note: str | None = None
+
+    for entity in entities:
+        model_slot = _BRAND_TO_MODEL_SLOT.get(entity.type)
+        value = (entity.value or "").strip()
+
+        if model_slot is None or not value or value.lower() in known_brands:
+            repaired.append(entity)
+            continue
+
+        brand = catalog.brand_for_model(value)
+        if brand is None and not catalog.is_known_model(value):
+            repaired.append(entity)
+            continue
+
+        # Never overwrite a model the customer actually stated. "Renzo S5"
+        # already fills both slots correctly; only a lone misfiled value is
+        # rewritten.
+        if model_slot not in present:
+            repaired.append(
+                entity.model_copy(update={"type": model_slot, "value": value})
+            )
+
+        if brand is not None:
+            repaired.append(entity.model_copy(update={"value": brand}))
+            resolved_note = f"{value} -> {brand}"
+        else:
+            resolved_note = f"{value} -> ambiguous"
+
+    return tuple(repaired), resolved_note
 
 
 def _is_only_small_talk(state: GraphState) -> bool:
